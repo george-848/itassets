@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import { MongoClient, type Db } from 'mongodb';
 import { createSeedData, type StoredUser } from './seed.ts';
 import type {
@@ -852,8 +852,9 @@ class SqliteItamsDatabase implements ItamsDatabase {
   }
 
   async init(): Promise<void> {
+    const { DatabaseSync: SqliteDatabaseSync } = await import('node:sqlite');
     fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
-    this.db = new DatabaseSync(this.dbPath);
+    this.db = new SqliteDatabaseSync(this.dbPath);
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
@@ -1566,6 +1567,12 @@ export async function createDatabase(): Promise<ItamsDatabase> {
         `[AssetVault IT] MongoDB Atlas connection failed (${reason}). Check MongoDB Atlas Network Access (allow 0.0.0.0/0) and credentials. Falling back to local persistent SQLite store so the app stays available.`
       );
     }
+  }
+
+  if (process.env.VERCEL) {
+    throw new Error(
+      'MONGODB_URI is required when running on Vercel. Configure MONGODB_URI in Vercel Project Environment Variables and allow 0.0.0.0/0 in MongoDB Atlas Network Access.'
+    );
   }
 
   const sqlitePath = path.resolve(process.cwd(), 'data', 'it_assets.db');
