@@ -1,0 +1,6 @@
+{
+  "name": "AssetVault IT",
+  "description": "Enterprise IT Assets Management System for tracking hardware inventory, employee assignments, maintenance logs, warranty alerts, and audit reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
