@@ -81,6 +81,47 @@ export function verifySessionToken(token: string): SessionPayload | null {
   }
 }
 
+export interface OAuthStatePayload {
+  nonce: string;
+  redirectUri: string;
+  exp: number;
+}
+
+export function signOAuthState(payload: OAuthStatePayload): string {
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(`oauth-state:${encoded}`)
+    .digest('base64url');
+  return `${encoded}.${sig}`;
+}
+
+export function verifyOAuthState(state: string): OAuthStatePayload | null {
+  const parts = state.split('.');
+  if (parts.length !== 2) return null;
+  const [encoded, sig] = parts;
+  if (!encoded || !sig) return null;
+  const expectedSig = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(`oauth-state:${encoded}`)
+    .digest('base64url');
+  const sigBuf = Buffer.from(sig);
+  const expectedBuf = Buffer.from(expectedSig);
+  if (sigBuf.length !== expectedBuf.length) return null;
+  if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) return null;
+  try {
+    const payload = JSON.parse(
+      Buffer.from(encoded, 'base64url').toString('utf8')
+    ) as OAuthStatePayload;
+    if (!payload.nonce || !payload.redirectUri || !payload.exp || payload.exp < Date.now()) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 export function extractTokenFromRequest(req: Request): string | null {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {

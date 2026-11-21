@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { motion } from 'motion/react';
 import {
   Eye,
@@ -24,7 +24,37 @@ export function LoginView({ onSuccess }: LoginViewProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [githubLoading, setGithubLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      const origin = event.origin;
+      const isTrusted =
+        origin === window.location.origin ||
+        origin.endsWith('.run.app') ||
+        origin.endsWith('.vercel.app') ||
+        origin.includes('localhost');
+      if (!isTrusted) return;
+
+      const data = event.data as
+        | { type?: string; token?: string; user?: User; error?: string }
+        | undefined;
+      if (!data || typeof data !== 'object') return;
+
+      if (data.type === 'GITHUB_OAUTH_SUCCESS' && data.token && data.user) {
+        setGithubLoading(false);
+        setError(null);
+        onSuccess(data.token, data.user);
+      } else if (data.type === 'GITHUB_OAUTH_ERROR') {
+        setGithubLoading(false);
+        setError(data.error || 'GitHub sign-in failed. Please try again.');
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [onSuccess]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -67,6 +97,42 @@ export function LoginView({ onSuccess }: LoginViewProps) {
       }
     } finally {
       setGoogleLoading(false);
+    }
+  };
+
+  const handleGitHubSignIn = async () => {
+    setError(null);
+    setGithubLoading(true);
+    try {
+      const { url } = await api.getGitHubAuthUrl();
+      const popup = window.open(
+        url,
+        'github_oauth_popup',
+        'width=600,height=700,noopener=no'
+      );
+      if (!popup) {
+        setGithubLoading(false);
+        setError(
+          'Sign-in popup was blocked by your browser. Please allow popups and try again.'
+        );
+        return;
+      }
+
+      const pollTimer = window.setInterval(() => {
+        if (popup.closed) {
+          window.clearInterval(pollTimer);
+          setGithubLoading(false);
+        }
+      }, 500);
+    } catch (err) {
+      setGithubLoading(false);
+      if (err instanceof ApiError) {
+        setError(err.message);
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('Unable to start GitHub sign-in. Please try again.');
+      }
     }
   };
 
@@ -228,7 +294,7 @@ export function LoginView({ onSuccess }: LoginViewProps) {
 
             <button
               type="submit"
-              disabled={loading || googleLoading}
+              disabled={loading || googleLoading || githubLoading}
               className="w-full mt-2 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-800 transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-60"
             >
               {loading ? 'Verifying credentials...' : 'Sign In'}
@@ -243,47 +309,69 @@ export function LoginView({ onSuccess }: LoginViewProps) {
             <div className="flex-grow border-t border-slate-200" />
           </div>
 
-          <button
-            type="button"
-            onClick={handleGoogleSignIn}
-            disabled={loading || googleLoading}
-            className="gsi-material-button w-full flex items-center justify-center gap-3 rounded-lg border border-[#747775]/40 bg-white px-4 py-2.5 text-sm font-medium text-[#1F1F1F] hover:bg-slate-50 hover:border-[#747775]/60 active:bg-slate-100 transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-60"
-          >
-            <span className="gsi-material-button-icon h-4.5 w-4.5 shrink-0" aria-hidden="true">
-              <svg
-                version="1.1"
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 48 48"
-                className="block h-full w-full"
-              >
-                <path
-                  fill="#EA4335"
-                  d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
-                />
-                <path
-                  fill="#4285F4"
-                  d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
-                />
-                <path fill="none" d="M0 0h48v48H0z" />
-              </svg>
-            </span>
-            <span className="gsi-material-button-contents whitespace-nowrap">
-              {googleLoading ? 'Connecting to Google...' : 'Sign in with Google'}
-            </span>
-          </button>
+          <div className="space-y-2.5">
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={loading || googleLoading || githubLoading}
+              className="gsi-material-button w-full flex items-center justify-center gap-3 rounded-lg border border-[#747775]/40 bg-white px-4 py-2.5 text-sm font-medium text-[#1F1F1F] hover:bg-slate-50 hover:border-[#747775]/60 active:bg-slate-100 transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-60"
+            >
+              <span className="gsi-material-button-icon h-4.5 w-4.5 shrink-0" aria-hidden="true">
+                <svg
+                  version="1.1"
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 48 48"
+                  className="block h-full w-full"
+                >
+                  <path
+                    fill="#EA4335"
+                    d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+                  />
+                  <path
+                    fill="#4285F4"
+                    d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+                  />
+                  <path fill="none" d="M0 0h48v48H0z" />
+                </svg>
+              </span>
+              <span className="gsi-material-button-contents whitespace-nowrap">
+                {googleLoading ? 'Connecting to Google...' : 'Sign in with Google'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleGitHubSignIn}
+              disabled={loading || googleLoading || githubLoading}
+              className="w-full flex items-center justify-center gap-3 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 hover:bg-slate-50 hover:border-slate-400 active:bg-slate-100 transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 disabled:opacity-60"
+            >
+              <span className="h-4.5 w-4.5 shrink-0" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  className="block h-full w-full text-slate-900"
+                >
+                  <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12Z" />
+                </svg>
+              </span>
+              <span className="whitespace-nowrap">
+                {githubLoading ? 'Connecting to GitHub...' : 'Sign in with GitHub'}
+              </span>
+            </button>
+          </div>
 
           <div className="mt-6 border-t border-slate-100 pt-4">
             <p className="text-xs text-slate-500">
               Authorized access only. Sign in with your administrator, IT staff,
-              or corporate Google account.
+              Google, or GitHub account.
             </p>
           </div>
         </motion.div>

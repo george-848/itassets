@@ -4,7 +4,9 @@ import {
   createAuthMiddleware,
   hashPassword,
   requireAdmin,
+  signOAuthState,
   signSessionToken,
+  verifyOAuthState,
   verifyPassword,
   type AuthenticatedRequest,
 } from './auth.ts';
@@ -188,6 +190,315 @@ export function createApiApp(db: ItamsDatabase): express.Express {
     } catch (err) {
       console.error('Google login error:', err);
       res.status(500).json({ error: 'Google authentication service error.' });
+    }
+  });
+
+  function resolveGitHubRedirectUri(req: express.Request): string {
+    const appUrl = (process.env.APP_URL || '')
+      .trim()
+      .replace(/^["']|["']$/g, '')
+      .replace(/\/$/, '');
+    if (appUrl && /^https?:\/\/[^/]+$/i.test(appUrl)) {
+      return `${appUrl}/api/auth/github/callback`;
+    }
+
+    const originHint =
+      typeof req.query.origin === 'string' ? req.query.origin.trim().replace(/\/$/, '') : '';
+    if (originHint && /^https?:\/\/[a-zA-Z0-9.-]+(:\d+)?$/i.test(originHint)) {
+      return `${originHint}/api/auth/github/callback`;
+    }
+
+    const vercelUrl = (process.env.VERCEL_URL || '').trim().replace(/\/$/, '');
+    if (vercelUrl) {
+      return `https://${vercelUrl}/api/auth/github/callback`;
+    }
+
+    const protoHeader = req.headers['x-forwarded-proto'];
+    const proto =
+      typeof protoHeader === 'string'
+        ? protoHeader.split(',')[0].trim()
+        : req.protocol || 'http';
+    const hostHeader = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+    const host = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
+    return `${proto}://${host}/api/auth/github/callback`;
+  }
+
+  function renderGitHubPopupResult(
+    payload:
+      | { type: 'GITHUB_OAUTH_SUCCESS'; token: string; user: unknown }
+      | { type: 'GITHUB_OAUTH_ERROR'; error: string }
+  ): string {
+    const serialized = JSON.stringify(payload).replace(/</g, '\\u003c');
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>AssetVault IT — GitHub Sign-In</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; background: #F8FAFC; color: #0F172A; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 24px; }
+      .card { background: #fff; border: 1px solid #E2E8F0; border-radius: 12px; padding: 24px; max-width: 380px; text-align: center; }
+      p { font-size: 14px; color: #475569; margin: 8px 0 0; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <strong>${payload.type === 'GITHUB_OAUTH_SUCCESS' ? 'Authentication Complete' : 'Authentication Failed'}</strong>
+      <p>${payload.type === 'GITHUB_OAUTH_SUCCESS' ? 'Returning to AssetVault IT. You can close this window.' : 'Returning to sign-in screen...'}</p>
+    </div>
+    <script>
+      (function () {
+        var data = ${serialized};
+        if (window.opener) {
+          window.opener.postMessage(data, '*');
+          window.close();
+        } else {
+          window.location.href = '/';
+        }
+      })();
+    </script>
+  </body>
+</html>`;
+  }
+
+  app.get('/api/auth/github/url', (req, res) => {
+    const clientId = (process.env.GITHUB_CLIENT_ID || '')
+      .trim()
+      .replace(/^["']|["']$/g, '');
+    const clientSecret = (process.env.GITHUB_CLIENT_SECRET || '')
+      .trim()
+      .replace(/^["']|["']$/g, '');
+
+    if (!clientId || !clientSecret) {
+      res.status(503).json({
+        error:
+          'GitHub Sign-In is not configured yet. Add GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET to your environment variables.',
+      });
+      return;
+    }
+
+    const redirectUri = resolveGitHubRedirectUri(req);
+    const state = signOAuthState({
+      nonce: crypto.randomUUID(),
+      redirectUri,
+      exp: Date.now() + 1000 * 60 * 10,
+    });
+
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope: 'read:user user:email',
+      state,
+    });
+
+    res.json({
+      url: `https://github.com/login/oauth/authorize?${params.toString()}`,
+      redirectUri,
+    });
+  });
+
+  app.get(['/api/auth/github/callback', '/api/auth/github/callback/'], async (req, res) => {
+    try {
+      const oauthError = typeof req.query.error === 'string' ? req.query.error : '';
+      if (oauthError) {
+        const desc =
+          typeof req.query.error_description === 'string' && req.query.error_description
+            ? req.query.error_description
+            : 'GitHub sign-in was cancelled or denied.';
+        res.status(400).send(renderGitHubPopupResult({ type: 'GITHUB_OAUTH_ERROR', error: desc }));
+        return;
+      }
+
+      const code = typeof req.query.code === 'string' ? req.query.code.trim() : '';
+      const rawState = typeof req.query.state === 'string' ? req.query.state.trim() : '';
+      if (!code || !rawState) {
+        res.status(400).send(
+          renderGitHubPopupResult({
+            type: 'GITHUB_OAUTH_ERROR',
+            error: 'Missing GitHub authorization code or state.',
+          })
+        );
+        return;
+      }
+
+      const statePayload = verifyOAuthState(rawState);
+      if (!statePayload) {
+        res.status(400).send(
+          renderGitHubPopupResult({
+            type: 'GITHUB_OAUTH_ERROR',
+            error: 'GitHub sign-in session expired or failed state verification. Please try again.',
+          })
+        );
+        return;
+      }
+
+      const clientId = (process.env.GITHUB_CLIENT_ID || '')
+        .trim()
+        .replace(/^["']|["']$/g, '');
+      const clientSecret = (process.env.GITHUB_CLIENT_SECRET || '')
+        .trim()
+        .replace(/^["']|["']$/g, '');
+
+      if (!clientId || !clientSecret) {
+        res.status(503).send(
+          renderGitHubPopupResult({
+            type: 'GITHUB_OAUTH_ERROR',
+            error: 'GitHub OAuth credentials are not configured on the server.',
+          })
+        );
+        return;
+      }
+
+      const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          client_id: clientId,
+          client_secret: clientSecret,
+          code,
+          redirect_uri: statePayload.redirectUri,
+        }),
+      });
+
+      const tokenData = (await tokenRes.json()) as {
+        access_token?: string;
+        error?: string;
+        error_description?: string;
+      };
+
+      if (!tokenRes.ok || !tokenData.access_token) {
+        res.status(401).send(
+          renderGitHubPopupResult({
+            type: 'GITHUB_OAUTH_ERROR',
+            error:
+              tokenData.error_description ||
+              'Failed to exchange GitHub authorization code.',
+          })
+        );
+        return;
+      }
+
+      const ghHeaders = {
+        Authorization: `Bearer ${tokenData.access_token}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'AssetVault-IT',
+      };
+
+      const [ghUserRes, ghEmailsRes] = await Promise.all([
+        fetch('https://api.github.com/user', { headers: ghHeaders }),
+        fetch('https://api.github.com/user/emails', { headers: ghHeaders }),
+      ]);
+
+      if (!ghUserRes.ok) {
+        res.status(401).send(
+          renderGitHubPopupResult({
+            type: 'GITHUB_OAUTH_ERROR',
+            error: 'Unable to fetch GitHub user profile.',
+          })
+        );
+        return;
+      }
+
+      const ghUser = (await ghUserRes.json()) as {
+        login?: string;
+        name?: string | null;
+        email?: string | null;
+      };
+
+      let verifiedEmail = '';
+      if (ghEmailsRes.ok) {
+        const emails = (await ghEmailsRes.json()) as Array<{
+          email?: string;
+          primary?: boolean;
+          verified?: boolean;
+        }>;
+        const primaryVerified = emails.find((e) => e.primary && e.verified && e.email);
+        const anyVerified = emails.find((e) => e.verified && e.email);
+        verifiedEmail = (primaryVerified?.email || anyVerified?.email || '')
+          .trim()
+          .toLowerCase();
+      } else if (typeof ghUser.email === 'string' && ghUser.email.trim()) {
+        verifiedEmail = ghUser.email.trim().toLowerCase();
+      }
+
+      if (!verifiedEmail) {
+        res.status(401).send(
+          renderGitHubPopupResult({
+            type: 'GITHUB_OAUTH_ERROR',
+            error: 'A verified email address on your GitHub account is required to sign in.',
+          })
+        );
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const existingUser = await db.findUserByEmail(verifiedEmail);
+
+      let safeUser;
+      if (existingUser) {
+        if (existingUser.status !== 'active') {
+          res.status(403).send(
+            renderGitHubPopupResult({
+              type: 'GITHUB_OAUTH_ERROR',
+              error: 'Your account has been deactivated. Contact an administrator.',
+            })
+          );
+          return;
+        }
+        await db.updateUserLastLogin(existingUser.id, now);
+        const { password_hash: _ignored, ...rest } = existingUser;
+        safeUser = { ...rest, last_login: now };
+      } else {
+        const displayName =
+          (typeof ghUser.name === 'string' && ghUser.name.trim()) ||
+          (typeof ghUser.login === 'string' && ghUser.login.trim()) ||
+          verifiedEmail.split('@')[0] ||
+          'IT Staff Member';
+        safeUser = await db.createUser({
+          id: `usr-${crypto.randomUUID().slice(0, 8)}`,
+          name: displayName,
+          email: verifiedEmail,
+          password_hash: hashPassword(crypto.randomBytes(24).toString('hex')),
+          role: 'staff',
+          department: 'IT Infrastructure',
+          status: 'active',
+          created_at: now,
+          last_login: now,
+        });
+      }
+
+      const token = signSessionToken({
+        id: safeUser.id,
+        email: safeUser.email,
+        role: safeUser.role,
+      });
+
+      const isHttps = statePayload.redirectUri.startsWith('https://');
+      res.cookie('av_session', token, {
+        httpOnly: true,
+        sameSite: isHttps ? 'none' : 'lax',
+        secure: isHttps,
+        path: '/',
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      });
+
+      res.send(
+        renderGitHubPopupResult({
+          type: 'GITHUB_OAUTH_SUCCESS',
+          token,
+          user: safeUser,
+        })
+      );
+    } catch (err) {
+      console.error('GitHub OAuth callback error:', err);
+      res.status(500).send(
+        renderGitHubPopupResult({
+          type: 'GITHUB_OAUTH_ERROR',
+          error: 'GitHub authentication failed due to a server error.',
+        })
+      );
     }
   });
 

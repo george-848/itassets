@@ -90,6 +90,10 @@ export const api = {
         Authorization: `Bearer ${googleAccessToken}`,
       },
     }),
+  getGitHubAuthUrl: () =>
+    request<{ url: string; redirectUri: string }>(
+      `/api/auth/github/url?origin=${encodeURIComponent(window.location.origin)}`
+    ),
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   me: () => request<{ user: User; engine: string }>('/api/auth/me'),
 
