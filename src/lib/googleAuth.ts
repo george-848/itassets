@@ -68,6 +68,13 @@ export async function googleSignIn(): Promise<{
         'Sign-in popup was blocked by your browser. Please allow popups and try again.'
       );
     }
+    if (code === 'auth/unauthorized-domain') {
+      const host =
+        typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+      throw new Error(
+        `Domain "${host}" is not authorized for Google Sign-In. Add "${host}" in Firebase Console → Authentication → Settings → Authorized domains.`
+      );
+    }
     if (err instanceof Error) {
       throw err;
     }
