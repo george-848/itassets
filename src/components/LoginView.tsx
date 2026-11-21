@@ -72,8 +72,8 @@ export function LoginView({ onSuccess }: LoginViewProps) {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col lg:flex-row">
-      {/* Left Structural Architectural Panel */}
-      <div className="lg:w-[46%] bg-[#0F172A] text-white p-8 sm:p-12 lg:p-14 flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-slate-800">
+      {/* Left Structural Architectural Panel (Desktop only) */}
+      <div className="hidden lg:flex lg:w-[46%] bg-[#0F172A] text-white p-14 flex-col justify-between border-r border-slate-800">
         <div>
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-white">
