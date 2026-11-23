@@ -75,6 +75,13 @@ export function createApiApp(db: ItamsDatabase): express.Express {
         res.status(401).json({ error: 'Invalid email address or password.' });
         return;
       }
+      if (user.status === 'pending') {
+        res.status(403).json({
+          error:
+            'Verification required: your account is awaiting administrator approval in User Management.',
+        });
+        return;
+      }
       if (user.status !== 'active') {
         res.status(403).json({
           error: 'Your account has been deactivated. Contact an administrator.',
@@ -105,77 +112,147 @@ export function createApiApp(db: ItamsDatabase): express.Express {
     }
   });
 
+  async function verifyAndAuthenticateOAuthUser(params: {
+    email: string;
+    displayName: string;
+    provider: 'Google' | 'GitHub';
+  }): Promise<
+    | { ok: true; token: string; user: ReturnType<typeof Object.assign> }
+    | { ok: false; status: number; error: string }
+  > {
+    const now = new Date().toISOString();
+    const existingUser = await db.findUserByEmail(params.email);
+
+    if (!existingUser) {
+      await db.createUser({
+        id: `usr-${crypto.randomUUID().slice(0, 8)}`,
+        name: params.displayName,
+        email: params.email,
+        password_hash: hashPassword(crypto.randomBytes(24).toString('hex')),
+        role: 'staff',
+        department: 'IT Infrastructure',
+        status: 'pending',
+        created_at: now,
+        last_login: null,
+      });
+      return {
+        ok: false,
+        status: 403,
+        error: `Verification required: your ${params.provider} account (${params.email}) has been submitted for administrator approval. Ask an admin to verify your access in User Management, then sign in again.`,
+      };
+    }
+
+    if (existingUser.status === 'pending') {
+      return {
+        ok: false,
+        status: 403,
+        error: `Verification required: your account (${params.email}) is still awaiting administrator approval in User Management.`,
+      };
+    }
+
+    if (existingUser.status !== 'active') {
+      return {
+        ok: false,
+        status: 403,
+        error: 'Your account has been deactivated. Contact an administrator.',
+      };
+    }
+
+    await db.updateUserLastLogin(existingUser.id, now);
+    const { password_hash: _ignored, ...rest } = existingUser;
+    const safeUser = { ...rest, last_login: now };
+    const token = signSessionToken({
+      id: safeUser.id,
+      email: safeUser.email,
+      role: safeUser.role,
+    });
+    return { ok: true, token, user: safeUser };
+  }
+
   app.post('/api/auth/google', async (req, res) => {
     try {
       const authHeader = req.headers.authorization;
-      const googleToken =
+      const headerToken =
+        typeof req.headers['x-google-access-token'] === 'string'
+          ? req.headers['x-google-access-token'].trim()
+          : '';
+      const bodyToken =
+        typeof req.body?.accessToken === 'string' ? req.body.accessToken.trim() : '';
+      const bearerToken =
         authHeader && authHeader.startsWith('Bearer ')
           ? authHeader.slice(7).trim()
           : '';
+      const googleToken = bodyToken || headerToken || bearerToken;
       if (!googleToken) {
         res.status(401).json({ error: 'Google access token is required.' });
         return;
       }
 
-      const userinfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { Authorization: `Bearer ${googleToken}` },
-      });
-      if (!userinfoRes.ok) {
+      const [tokeninfoRes, userinfoRes] = await Promise.all([
+        fetch(
+          `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(googleToken)}`
+        ),
+        fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${googleToken}` },
+        }),
+      ]);
+
+      if (!tokeninfoRes.ok || !userinfoRes.ok) {
         res.status(401).json({ error: 'Invalid or expired Google credentials.' });
         return;
       }
 
+      const tokeninfo = (await tokeninfoRes.json()) as {
+        email?: unknown;
+        email_verified?: unknown;
+        expires_in?: unknown;
+      };
       const profile = (await userinfoRes.json()) as {
         email?: unknown;
         email_verified?: unknown;
         name?: unknown;
       };
+
+      const expiresIn = Number(tokeninfo.expires_in ?? 0);
+      if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
+        res.status(401).json({ error: 'Google authentication token has expired.' });
+        return;
+      }
+
       const email =
         typeof profile.email === 'string' ? profile.email.trim().toLowerCase() : '';
-      if (!email || profile.email_verified !== true) {
+      const tokenEmail =
+        typeof tokeninfo.email === 'string' ? tokeninfo.email.trim().toLowerCase() : '';
+      const tokenEmailVerified =
+        tokeninfo.email_verified === true || tokeninfo.email_verified === 'true';
+
+      if (
+        !email ||
+        profile.email_verified !== true ||
+        !tokenEmailVerified ||
+        (tokenEmail && tokenEmail !== email)
+      ) {
         res.status(401).json({ error: 'A verified Google email address is required.' });
         return;
       }
 
-      const now = new Date().toISOString();
-      const existingUser = await db.findUserByEmail(email);
+      const displayName =
+        typeof profile.name === 'string' && profile.name.trim()
+          ? profile.name.trim()
+          : email.split('@')[0] || 'IT Staff Member';
 
-      let safeUser;
-      if (existingUser) {
-        if (existingUser.status !== 'active') {
-          res.status(403).json({
-            error: 'Your account has been deactivated. Contact an administrator.',
-          });
-          return;
-        }
-        await db.updateUserLastLogin(existingUser.id, now);
-        const { password_hash: _ignored, ...rest } = existingUser;
-        safeUser = { ...rest, last_login: now };
-      } else {
-        const displayName =
-          typeof profile.name === 'string' && profile.name.trim()
-            ? profile.name.trim()
-            : email.split('@')[0] || 'IT Staff Member';
-        safeUser = await db.createUser({
-          id: `usr-${crypto.randomUUID().slice(0, 8)}`,
-          name: displayName,
-          email,
-          password_hash: hashPassword(crypto.randomBytes(24).toString('hex')),
-          role: 'staff',
-          department: 'IT Infrastructure',
-          status: 'active',
-          created_at: now,
-          last_login: now,
-        });
-      }
-
-      const token = signSessionToken({
-        id: safeUser.id,
-        email: safeUser.email,
-        role: safeUser.role,
+      const authResult = await verifyAndAuthenticateOAuthUser({
+        email,
+        displayName,
+        provider: 'Google',
       });
 
-      res.cookie('av_session', token, {
+      if (!authResult.ok) {
+        res.status(authResult.status).json({ error: authResult.error });
+        return;
+      }
+
+      res.cookie('av_session', authResult.token, {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
@@ -183,8 +260,8 @@ export function createApiApp(db: ItamsDatabase): express.Express {
       });
 
       res.json({
-        token,
-        user: safeUser,
+        token: authResult.token,
+        user: authResult.user,
         engine: db.engine,
       });
     } catch (err) {
@@ -202,8 +279,11 @@ export function createApiApp(db: ItamsDatabase): express.Express {
       return `${appUrl}/api/auth/github/callback`;
     }
 
-    const originHint =
+    const bodyOrigin =
+      typeof req.body?.origin === 'string' ? req.body.origin.trim().replace(/\/$/, '') : '';
+    const queryOrigin =
       typeof req.query.origin === 'string' ? req.query.origin.trim().replace(/\/$/, '') : '';
+    const originHint = bodyOrigin || queryOrigin;
     if (originHint && /^https?:\/\/[a-zA-Z0-9.-]+(:\d+)?$/i.test(originHint)) {
       return `${originHint}/api/auth/github/callback`;
     }
@@ -260,7 +340,7 @@ export function createApiApp(db: ItamsDatabase): express.Express {
 </html>`;
   }
 
-  app.get('/api/auth/github/url', (req, res) => {
+  const handleGitHubAuthUrl = (req: express.Request, res: express.Response) => {
     const clientId = (process.env.GITHUB_CLIENT_ID || '')
       .trim()
       .replace(/^["']|["']$/g, '');
@@ -294,7 +374,10 @@ export function createApiApp(db: ItamsDatabase): express.Express {
       url: `https://github.com/login/oauth/authorize?${params.toString()}`,
       redirectUri,
     });
-  });
+  };
+
+  app.get('/api/auth/github/url', handleGitHubAuthUrl);
+  app.post('/api/auth/github/url', handleGitHubAuthUrl);
 
   app.get(['/api/auth/github/callback', '/api/auth/github/callback/'], async (req, res) => {
     try {
@@ -391,11 +474,11 @@ export function createApiApp(db: ItamsDatabase): express.Express {
         fetch('https://api.github.com/user/emails', { headers: ghHeaders }),
       ]);
 
-      if (!ghUserRes.ok) {
+      if (!ghUserRes.ok || !ghEmailsRes.ok) {
         res.status(401).send(
           renderGitHubPopupResult({
             type: 'GITHUB_OAUTH_ERROR',
-            error: 'Unable to fetch GitHub user profile.',
+            error: 'Unable to verify GitHub profile and email status.',
           })
         );
         return;
@@ -404,24 +487,22 @@ export function createApiApp(db: ItamsDatabase): express.Express {
       const ghUser = (await ghUserRes.json()) as {
         login?: string;
         name?: string | null;
-        email?: string | null;
       };
 
-      let verifiedEmail = '';
-      if (ghEmailsRes.ok) {
-        const emails = (await ghEmailsRes.json()) as Array<{
-          email?: string;
-          primary?: boolean;
-          verified?: boolean;
-        }>;
-        const primaryVerified = emails.find((e) => e.primary && e.verified && e.email);
-        const anyVerified = emails.find((e) => e.verified && e.email);
-        verifiedEmail = (primaryVerified?.email || anyVerified?.email || '')
-          .trim()
-          .toLowerCase();
-      } else if (typeof ghUser.email === 'string' && ghUser.email.trim()) {
-        verifiedEmail = ghUser.email.trim().toLowerCase();
-      }
+      const emails = (await ghEmailsRes.json()) as Array<{
+        email?: string;
+        primary?: boolean;
+        verified?: boolean;
+      }>;
+      const primaryVerified = Array.isArray(emails)
+        ? emails.find((e) => e.primary && e.verified === true && e.email)
+        : undefined;
+      const anyVerified = Array.isArray(emails)
+        ? emails.find((e) => e.verified === true && e.email)
+        : undefined;
+      const verifiedEmail = (primaryVerified?.email || anyVerified?.email || '')
+        .trim()
+        .toLowerCase();
 
       if (!verifiedEmail) {
         res.status(401).send(
@@ -433,50 +514,30 @@ export function createApiApp(db: ItamsDatabase): express.Express {
         return;
       }
 
-      const now = new Date().toISOString();
-      const existingUser = await db.findUserByEmail(verifiedEmail);
+      const displayName =
+        (typeof ghUser.name === 'string' && ghUser.name.trim()) ||
+        (typeof ghUser.login === 'string' && ghUser.login.trim()) ||
+        verifiedEmail.split('@')[0] ||
+        'IT Staff Member';
 
-      let safeUser;
-      if (existingUser) {
-        if (existingUser.status !== 'active') {
-          res.status(403).send(
-            renderGitHubPopupResult({
-              type: 'GITHUB_OAUTH_ERROR',
-              error: 'Your account has been deactivated. Contact an administrator.',
-            })
-          );
-          return;
-        }
-        await db.updateUserLastLogin(existingUser.id, now);
-        const { password_hash: _ignored, ...rest } = existingUser;
-        safeUser = { ...rest, last_login: now };
-      } else {
-        const displayName =
-          (typeof ghUser.name === 'string' && ghUser.name.trim()) ||
-          (typeof ghUser.login === 'string' && ghUser.login.trim()) ||
-          verifiedEmail.split('@')[0] ||
-          'IT Staff Member';
-        safeUser = await db.createUser({
-          id: `usr-${crypto.randomUUID().slice(0, 8)}`,
-          name: displayName,
-          email: verifiedEmail,
-          password_hash: hashPassword(crypto.randomBytes(24).toString('hex')),
-          role: 'staff',
-          department: 'IT Infrastructure',
-          status: 'active',
-          created_at: now,
-          last_login: now,
-        });
-      }
-
-      const token = signSessionToken({
-        id: safeUser.id,
-        email: safeUser.email,
-        role: safeUser.role,
+      const authResult = await verifyAndAuthenticateOAuthUser({
+        email: verifiedEmail,
+        displayName,
+        provider: 'GitHub',
       });
 
+      if (!authResult.ok) {
+        res.status(authResult.status).send(
+          renderGitHubPopupResult({
+            type: 'GITHUB_OAUTH_ERROR',
+            error: authResult.error,
+          })
+        );
+        return;
+      }
+
       const isHttps = statePayload.redirectUri.startsWith('https://');
-      res.cookie('av_session', token, {
+      res.cookie('av_session', authResult.token, {
         httpOnly: true,
         sameSite: isHttps ? 'none' : 'lax',
         secure: isHttps,
@@ -487,8 +548,8 @@ export function createApiApp(db: ItamsDatabase): express.Express {
       res.send(
         renderGitHubPopupResult({
           type: 'GITHUB_OAUTH_SUCCESS',
-          token,
-          user: safeUser,
+          token: authResult.token,
+          user: authResult.user,
         })
       );
     } catch (err) {
@@ -1319,7 +1380,10 @@ export function createApiApp(db: ItamsDatabase): express.Express {
       const password = String(body.password ?? '');
       const role: UserRole = body.role === 'admin' ? 'admin' : 'staff';
       const department = String(body.department ?? 'IT Infrastructure').trim();
-      const status = body.status === 'inactive' ? 'inactive' : 'active';
+      const status =
+        body.status === 'inactive' || body.status === 'pending'
+          ? body.status
+          : 'active';
 
       if (!name || !email || !password) {
         res.status(400).json({ error: 'Name, email, and initial password are required.' });
@@ -1375,7 +1439,7 @@ export function createApiApp(db: ItamsDatabase): express.Express {
         body.role === 'admin' || body.role === 'staff' ? body.role : current.role;
       const department = String(body.department ?? current.department).trim();
       const status =
-        body.status === 'inactive' || body.status === 'active'
+        body.status === 'inactive' || body.status === 'pending' || body.status === 'active'
           ? body.status
           : current.status;
       const password = body.password ? String(body.password) : '';

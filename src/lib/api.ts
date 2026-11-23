@@ -39,8 +39,12 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = getStoredToken();
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  options: { skipAuth?: boolean } = {}
+): Promise<T> {
+  const token = options.skipAuth ? null : getStoredToken();
   const headers = new Headers(init.headers);
   if (!headers.has('Content-Type') && init.body) {
     headers.set('Content-Type', 'application/json');
@@ -61,7 +65,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     try {
       data = JSON.parse(text) as Record<string, unknown>;
     } catch {
-      data = { error: text };
+      const trimmed = text.trim();
+      const isHtml =
+        trimmed.startsWith('<') || trimmed.toLowerCase().includes('<html');
+      data = {
+        error:
+          isHtml && res.status === 403
+            ? 'Session proxy returned HTTP 403. Reload the AI Studio page (and allow third-party cookies for the preview iframe) and try again.'
+            : isHtml
+              ? `Server returned HTTP ${res.status}. Please refresh the page and try again.`
+              : trimmed,
+      };
     }
   }
 
@@ -79,20 +93,31 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   // Auth
   login: (email: string, password: string) =>
-    request<{ token: string; user: User; engine: string }>('/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    }),
-  loginWithGoogle: (googleAccessToken: string) =>
-    request<{ token: string; user: User; engine: string }>('/api/auth/google', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${googleAccessToken}`,
+    request<{ token: string; user: User; engine: string }>(
+      '/api/auth/login',
+      {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
       },
-    }),
+      { skipAuth: true }
+    ),
+  loginWithGoogle: (googleAccessToken: string) =>
+    request<{ token: string; user: User; engine: string }>(
+      '/api/auth/google',
+      {
+        method: 'POST',
+        body: JSON.stringify({ accessToken: googleAccessToken }),
+      },
+      { skipAuth: true }
+    ),
   getGitHubAuthUrl: () =>
     request<{ url: string; redirectUri: string }>(
-      `/api/auth/github/url?origin=${encodeURIComponent(window.location.origin)}`
+      '/api/auth/github/url',
+      {
+        method: 'POST',
+        body: JSON.stringify({ origin: window.location.origin }),
+      },
+      { skipAuth: true }
     ),
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   me: () => request<{ user: User; engine: string }>('/api/auth/me'),
@@ -229,7 +254,7 @@ export const api = {
     password: string;
     role: UserRole;
     department: string;
-    status: 'active' | 'inactive';
+    status: 'active' | 'pending' | 'inactive';
   }) =>
     request<{ user: User }>('/api/users', {
       method: 'POST',
@@ -242,7 +267,7 @@ export const api = {
       email: string;
       role: UserRole;
       department: string;
-      status: 'active' | 'inactive';
+      status: 'active' | 'pending' | 'inactive';
       password?: string;
     }
   ) =>

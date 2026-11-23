@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { FileSpreadsheet, FileText } from 'lucide-react';
+import { BarChart3, FileSpreadsheet, FileText } from 'lucide-react';
 import { exportReportToExcel, exportReportToPDF } from '../lib/exports.ts';
 import {
   ASSET_CATEGORIES,
@@ -12,6 +12,8 @@ import {
   type MaintenanceLog,
 } from '../types/itams.ts';
 import { formatCurrencyExact } from './StatusText.tsx';
+import { DataPagination } from './ui/DataPagination.tsx';
+import { EmptyState } from './ui/EmptyState.tsx';
 
 type ReportType = 'inventory' | 'assigned' | 'maintenance' | 'warranty';
 
@@ -21,6 +23,9 @@ interface ReportsViewProps {
   maintenanceLogs: MaintenanceLog[];
   onToast: (type: 'success' | 'error', message: string) => void;
 }
+
+const SELECT_CLASS =
+  'rounded-lg border border-[var(--av-border)] bg-[var(--av-surface-muted)] px-3 py-2 text-xs font-medium text-[var(--av-text)] transition-all focus:bg-[var(--av-surface)] focus:border-[var(--av-accent)] focus:outline-none focus:ring-3 focus:ring-[var(--av-accent-soft)]';
 
 export function ReportsView({
   assets,
@@ -36,6 +41,8 @@ export function ReportsView({
   const [warrantyScope, setWarrantyScope] = useState<
     'all_risk' | 'expiring_45' | 'expired' | 'replacement_due'
   >('all_risk');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -167,7 +174,6 @@ export function ReportsView({
       };
     }
 
-    // Warranty & Replacement Report
     const warrantyItems = assets
       .filter((a) => a.status !== 'Retired')
       .map((a) => {
@@ -239,6 +245,22 @@ export function ReportsView({
     dayMs,
   ]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [
+    reportType,
+    categoryFilter,
+    statusFilter,
+    deptFilter,
+    maintenanceStatus,
+    warrantyScope,
+  ]);
+
+  const paginatedRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return reportPayload.rows.slice(start, start + pageSize);
+  }, [reportPayload.rows, page, pageSize]);
+
   const handleExportPDF = () => {
     exportReportToPDF(reportPayload);
     onToast('success', `${reportPayload.title} exported as PDF.`);
@@ -255,11 +277,11 @@ export function ReportsView({
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* Report Selector & Export Actions */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+      <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-4 sm:p-5 shadow-[var(--av-card-shadow)] space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="inline-flex flex-wrap items-center gap-1 rounded-lg bg-slate-100 p-1">
+          <div className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-[var(--av-border-subtle)] bg-[var(--av-surface-muted)] p-1">
             {(
               [
                 ['inventory', 'Asset Inventory'],
@@ -275,14 +297,16 @@ export function ReportsView({
                   type="button"
                   onClick={() => setReportType(key)}
                   className={`relative px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                    active ? 'text-slate-900' : 'text-slate-600 hover:text-slate-900'
+                    active
+                      ? 'text-[var(--av-text)]'
+                      : 'text-[var(--av-text-muted)] hover:text-[var(--av-text)]'
                   }`}
                 >
                   {active && (
                     <motion.span
                       layoutId="reports-tab-indicator"
-                      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-                      className="absolute inset-0 rounded-md bg-white shadow-xs"
+                      transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+                      className="absolute inset-0 rounded-md bg-[var(--av-surface)] border border-[var(--av-border-subtle)] shadow-xs"
                     />
                   )}
                   <span className="relative z-10">{label}</span>
@@ -292,36 +316,39 @@ export function ReportsView({
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
-            <button
+            <motion.button
+              whileTap={{ scale: 0.985 }}
               type="button"
               onClick={handleExportExcel}
               disabled={reportPayload.rows.length === 0}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3.5 py-2 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap disabled:opacity-50"
             >
-              <FileSpreadsheet className="h-4 w-4 text-emerald-700" />
+              <FileSpreadsheet className="h-4 w-4 text-emerald-700 dark:text-emerald-400" />
               <span>Export Excel</span>
-            </button>
-            <button
+            </motion.button>
+            <motion.button
+              whileTap={{ scale: 0.985 }}
               type="button"
               onClick={handleExportPDF}
               disabled={reportPayload.rows.length === 0}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-800 transition-colors whitespace-nowrap disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap disabled:opacity-50"
             >
               <FileText className="h-4 w-4" />
               <span>Export PDF</span>
-            </button>
+            </motion.button>
           </div>
         </div>
 
         {/* Report-Specific Filters */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--av-border-subtle)] pt-4">
           <div className="flex flex-wrap items-center gap-2.5">
             {reportType === 'inventory' && (
               <>
                 <select
                   value={categoryFilter}
                   onChange={(e) => setCategoryFilter(e.target.value)}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 focus:border-blue-600 focus:outline-none"
+                  aria-label="Filter report by category"
+                  className={SELECT_CLASS}
                 >
                   <option value="ALL">All Categories</option>
                   {ASSET_CATEGORIES.map((c) => (
@@ -333,7 +360,8 @@ export function ReportsView({
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 focus:border-blue-600 focus:outline-none"
+                  aria-label="Filter report by status"
+                  className={SELECT_CLASS}
                 >
                   <option value="ALL">All Statuses</option>
                   {ASSET_STATUSES.map((s) => (
@@ -349,7 +377,8 @@ export function ReportsView({
               <select
                 value={deptFilter}
                 onChange={(e) => setDeptFilter(e.target.value)}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 focus:border-blue-600 focus:outline-none"
+                aria-label="Filter report by department"
+                className={SELECT_CLASS}
               >
                 <option value="ALL">All Departments</option>
                 {DEPARTMENTS.map((d) => (
@@ -364,7 +393,8 @@ export function ReportsView({
               <select
                 value={maintenanceStatus}
                 onChange={(e) => setMaintenanceStatus(e.target.value)}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 focus:border-blue-600 focus:outline-none"
+                aria-label="Filter report by maintenance status"
+                className={SELECT_CLASS}
               >
                 <option value="ALL">All Maintenance Statuses</option>
                 {MAINTENANCE_STATUSES.map((s) => (
@@ -387,9 +417,10 @@ export function ReportsView({
                       | 'replacement_due'
                   )
                 }
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 focus:border-blue-600 focus:outline-none"
+                aria-label="Filter warranty risk scope"
+                className={SELECT_CLASS}
               >
-                <option value="all_risk">All Warranty & Lifecycle Risks</option>
+                <option value="all_risk">All Warranty &amp; Lifecycle Risks</option>
                 <option value="expiring_45">Expiring Within 45 Days</option>
                 <option value="expired">Warranty Already Expired</option>
                 <option value="replacement_due">Replacement Due (4+ Years)</option>
@@ -397,9 +428,16 @@ export function ReportsView({
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-slate-700 tabular-nums">
-            {reportPayload.summaryLines.map((line) => (
-              <span key={line}>{line}</span>
+          <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-[var(--av-text-muted)] tabular-nums">
+            {reportPayload.summaryLines.map((line, index) => (
+              <span key={line} className="inline-flex items-center gap-3">
+                {index > 0 && (
+                  <span className="text-[var(--av-text-subtle)]" aria-hidden="true">
+                    ·
+                  </span>
+                )}
+                <span>{line}</span>
+              </span>
             ))}
           </div>
         </div>
@@ -413,57 +451,74 @@ export function ReportsView({
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -4 }}
           transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-          className="rounded-xl border border-slate-200 bg-white overflow-hidden"
+          className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-[var(--av-card-shadow)] overflow-hidden"
         >
-        <div className="border-b border-slate-100 px-5 py-3.5 flex items-center justify-between">
-          <div>
-            <h3 className="font-display text-sm font-semibold text-slate-900">
-              {reportPayload.title}
-            </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Live dataset preview · {reportPayload.rows.length} rows
-            </p>
+          <div className="border-b border-[var(--av-border-subtle)] px-5 py-3.5 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="font-display text-sm font-semibold text-[var(--av-text)]">
+                {reportPayload.title}
+              </h3>
+              <p className="text-xs text-[var(--av-text-subtle)] mt-0.5 tabular-nums">
+                Live dataset preview · {reportPayload.rows.length} exportable rows
+              </p>
+            </div>
           </div>
-        </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/80 text-xs font-semibold text-slate-600">
-                {reportPayload.columns.map((col) => (
-                  <th key={col} className="py-3 px-4 whitespace-nowrap">
-                    {col}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs">
-              {reportPayload.rows.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={reportPayload.columns.length}
-                    className="py-12 text-center text-slate-500"
-                  >
-                    No records match the selected report filters.
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-[var(--av-border)] bg-[var(--av-surface-muted)] text-xs font-semibold text-[var(--av-text-muted)]">
+                  {reportPayload.columns.map((col) => (
+                    <th key={col} className="py-3 px-4 whitespace-nowrap">
+                      {col}
+                    </th>
+                  ))}
                 </tr>
-              ) : (
-                reportPayload.rows.map((row, idx) => (
-                  <tr key={idx} className="hover:bg-slate-50/70">
-                    {row.map((cell, cIdx) => (
-                      <td
-                        key={cIdx}
-                        className="py-2.5 px-4 text-slate-700 tabular-nums whitespace-nowrap"
-                      >
-                        {cell}
-                      </td>
-                    ))}
+              </thead>
+              <tbody className="divide-y divide-[var(--av-border-subtle)] text-xs">
+                {paginatedRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={reportPayload.columns.length}>
+                      <EmptyState
+                        icon={BarChart3}
+                        title="No matching rows for export"
+                        description="Adjust the selected category, status, or department filters to generate this report dataset."
+                      />
+                    </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ) : (
+                  paginatedRows.map((row, idx) => (
+                    <tr
+                      key={(page - 1) * pageSize + idx}
+                      className="hover:bg-[var(--av-surface-hover)] transition-colors"
+                    >
+                      {row.map((cell, cIdx) => (
+                        <td
+                          key={cIdx}
+                          className={`py-3 px-4 tabular-nums whitespace-nowrap ${
+                            cIdx === 0
+                              ? 'font-mono font-semibold text-[var(--av-text)]'
+                              : 'text-[var(--av-text-muted)]'
+                          }`}
+                        >
+                          {cell}
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <DataPagination
+            totalItems={reportPayload.rows.length}
+            page={page}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            itemLabel="rows"
+          />
         </motion.div>
       </AnimatePresence>
     </div>

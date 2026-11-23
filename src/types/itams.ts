@@ -58,7 +58,7 @@ export interface User {
   email: string;
   role: UserRole;
   department: string;
-  status: 'active' | 'inactive';
+  status: 'active' | 'pending' | 'inactive';
   created_at: string;
   last_login: string | null;
 }

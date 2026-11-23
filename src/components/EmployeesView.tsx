@@ -1,5 +1,16 @@
-import { useMemo, useState, type FormEvent } from 'react';
-import { Eye, Pencil, Plus, Search, Trash2, UserPlus, X } from 'lucide-react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import {
+  ArrowUpDown,
+  Eye,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  UserPlus,
+  Users,
+  X,
+} from 'lucide-react';
 import { api, ApiError } from '../lib/api.ts';
 import {
   DEPARTMENTS,
@@ -9,6 +20,8 @@ import {
   type UserRole,
 } from '../types/itams.ts';
 import { ConfirmDialog } from './ConfirmDialog.tsx';
+import { DataPagination } from './ui/DataPagination.tsx';
+import { EmptyState } from './ui/EmptyState.tsx';
 
 interface EmployeesViewProps {
   employees: Employee[];
@@ -40,6 +53,11 @@ const EMPTY_EMP: EmployeeFormState = {
   status: 'active',
 };
 
+type SortField = 'employee_code' | 'full_name' | 'department' | 'assigned_count';
+
+const INPUT_CLASS =
+  'w-full rounded-lg border border-[var(--av-border)] bg-[var(--av-surface-muted)] px-3 py-2 text-sm text-[var(--av-text)] placeholder:text-[var(--av-text-subtle)] transition-all focus:bg-[var(--av-surface)] focus:border-[var(--av-accent)] focus:outline-none focus:ring-3 focus:ring-[var(--av-accent-soft)]';
+
 export function EmployeesView({
   employees,
   userRole,
@@ -50,6 +68,10 @@ export function EmployeesView({
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'active' | 'inactive'>('ALL');
+  const [sortField, setSortField] = useState<SortField>('employee_code');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
@@ -67,7 +89,7 @@ export function EmployeesView({
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return employees.filter((e) => {
+    const list = employees.filter((e) => {
       if (deptFilter !== 'ALL' && e.department !== deptFilter) return false;
       if (statusFilter !== 'ALL' && e.status !== statusFilter) return false;
       if (!q) return true;
@@ -79,7 +101,37 @@ export function EmployeesView({
         e.department.toLowerCase().includes(q)
       );
     });
-  }, [employees, search, deptFilter, statusFilter]);
+
+    list.sort((a, b) => {
+      let cmp = 0;
+      if (sortField === 'assigned_count') {
+        cmp = (a.assigned_count ?? 0) - (b.assigned_count ?? 0);
+      } else {
+        cmp = String(a[sortField]).localeCompare(String(b[sortField]));
+      }
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+
+    return list;
+  }, [employees, search, deptFilter, statusFilter, sortField, sortDir]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, deptFilter, statusFilter]);
+
+  const paginated = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page, pageSize]);
+
+  const toggleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  };
 
   const openDetail = async (employee: Employee) => {
     setDetailEmployee(employee);
@@ -179,18 +231,18 @@ export function EmployeesView({
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* Toolbar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-4 shadow-[var(--av-card-shadow)]">
         <div className="flex flex-1 flex-wrap items-center gap-2.5">
           <div className="relative flex-1 min-w-[220px] max-w-sm">
-            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--av-text-subtle)]" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search name, code, email, title..."
-              className="w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/15"
+              className="w-full rounded-lg border border-[var(--av-border)] bg-[var(--av-surface-muted)] pl-9 pr-3.5 py-2 text-sm text-[var(--av-text)] placeholder:text-[var(--av-text-subtle)] transition-all focus:bg-[var(--av-surface)] focus:border-[var(--av-accent)] focus:outline-none focus:ring-3 focus:ring-[var(--av-accent-soft)]"
             />
           </div>
 
@@ -198,7 +250,7 @@ export function EmployeesView({
             value={deptFilter}
             onChange={(e) => setDeptFilter(e.target.value)}
             aria-label="Filter by department"
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-blue-600 focus:outline-none"
+            className="rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-medium text-[var(--av-text-muted)] transition-colors focus:border-[var(--av-accent)] focus:outline-none focus:ring-3 focus:ring-[var(--av-accent-soft)]"
           >
             <option value="ALL">All Departments</option>
             {DEPARTMENTS.map((d) => (
@@ -214,7 +266,7 @@ export function EmployeesView({
               setStatusFilter(e.target.value as 'ALL' | 'active' | 'inactive')
             }
             aria-label="Filter by status"
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 focus:border-blue-600 focus:outline-none"
+            className="rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-medium text-[var(--av-text-muted)] transition-colors focus:border-[var(--av-accent)] focus:outline-none focus:ring-3 focus:ring-[var(--av-accent-soft)]"
           >
             <option value="ALL">All Statuses</option>
             <option value="active">Active</option>
@@ -223,94 +275,137 @@ export function EmployeesView({
         </div>
 
         <div className="flex items-center justify-between lg:justify-end gap-3">
-          <span className="text-xs text-slate-500 tabular-nums whitespace-nowrap">
+          <span className="text-xs font-medium text-[var(--av-text-subtle)] tabular-nums whitespace-nowrap">
             {filtered.length} of {employees.length} employees
           </span>
-          <button
+          <motion.button
             type="button"
+            whileTap={{ scale: 0.985 }}
             onClick={openCreate}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap shrink-0"
           >
             <Plus className="h-4 w-4" />
             <span>Register Employee</span>
-          </button>
+          </motion.button>
         </div>
       </div>
 
       {/* Employee Directory Table */}
-      <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+      <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-[var(--av-card-shadow)] overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/80 text-xs font-semibold text-slate-600">
-                <th className="py-3 px-4">Employee ID</th>
-                <th className="py-3 px-4">Name & Contact</th>
-                <th className="py-3 px-4">Department</th>
+              <tr className="border-b border-[var(--av-border)] bg-[var(--av-surface-muted)] text-xs font-semibold text-[var(--av-text-muted)]">
+                <th className="py-3 px-4">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort('employee_code')}
+                    className="inline-flex items-center gap-1 hover:text-[var(--av-text)]"
+                  >
+                    <span>Employee ID</span>
+                    <ArrowUpDown className="h-3 w-3" />
+                  </button>
+                </th>
+                <th className="py-3 px-4">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort('full_name')}
+                    className="inline-flex items-center gap-1 hover:text-[var(--av-text)]"
+                  >
+                    <span>Name & Contact</span>
+                    <ArrowUpDown className="h-3 w-3" />
+                  </button>
+                </th>
+                <th className="py-3 px-4">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort('department')}
+                    className="inline-flex items-center gap-1 hover:text-[var(--av-text)]"
+                  >
+                    <span>Department</span>
+                    <ArrowUpDown className="h-3 w-3" />
+                  </button>
+                </th>
                 <th className="py-3 px-4">Job Title</th>
                 <th className="py-3 px-4">Location</th>
-                <th className="py-3 px-4 text-right">Assigned Assets</th>
+                <th className="py-3 px-4 text-right">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort('assigned_count')}
+                    className="inline-flex items-center gap-1 hover:text-[var(--av-text)] ml-auto"
+                  >
+                    <span>Assigned Assets</span>
+                    <ArrowUpDown className="h-3 w-3" />
+                  </button>
+                </th>
                 <th className="py-3 px-4">Status</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 text-sm">
-              {filtered.length === 0 ? (
+            <tbody className="divide-y divide-[var(--av-border-subtle)] text-sm">
+              {paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center">
-                    <p className="text-sm font-medium text-slate-700">
-                      No matching employees found
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Adjust filters or register a new employee profile.
-                    </p>
+                  <td colSpan={8}>
+                    <EmptyState
+                      icon={Users}
+                      title="No matching employees found"
+                      description="Adjust filters or register a new employee profile in the corporate directory."
+                      actionLabel={employees.length === 0 ? 'Register Employee' : undefined}
+                      onAction={employees.length === 0 ? openCreate : undefined}
+                    />
                   </td>
                 </tr>
               ) : (
-                filtered.map((emp) => (
-                  <tr key={emp.id} className="hover:bg-slate-50/70 transition-colors">
-                    <td className="py-2.5 px-4 font-mono text-xs font-semibold text-slate-900 whitespace-nowrap">
+                paginated.map((emp) => (
+                  <tr
+                    key={emp.id}
+                    className="hover:bg-[var(--av-surface-hover)] transition-colors"
+                  >
+                    <td className="py-3 px-4 font-mono text-xs font-semibold text-[var(--av-text)] whitespace-nowrap">
                       {emp.employee_code}
                     </td>
-                    <td className="py-2.5 px-4 min-w-[200px]">
+                    <td className="py-3 px-4 min-w-[200px]">
                       <button
                         type="button"
                         onClick={() => openDetail(emp)}
-                        className="font-medium text-slate-900 hover:text-blue-700 hover:underline text-left"
+                        className="font-semibold text-[13px] text-[var(--av-text)] hover:text-[var(--av-accent)] hover:underline text-left"
                       >
                         {emp.full_name}
                       </button>
-                      <div className="text-xs text-slate-500">{emp.email}</div>
+                      <div className="text-xs text-[var(--av-text-subtle)]">
+                        {emp.email}
+                      </div>
                     </td>
-                    <td className="py-2.5 px-4 text-xs text-slate-700 whitespace-nowrap">
+                    <td className="py-3 px-4 text-xs text-[var(--av-text-muted)] whitespace-nowrap">
                       {emp.department}
                     </td>
-                    <td className="py-2.5 px-4 text-xs text-slate-600">
+                    <td className="py-3 px-4 text-xs text-[var(--av-text-subtle)]">
                       {emp.job_title}
                     </td>
-                    <td className="py-2.5 px-4 text-xs text-slate-600">
+                    <td className="py-3 px-4 text-xs text-[var(--av-text-subtle)]">
                       {emp.location}
                     </td>
-                    <td className="py-2.5 px-4 text-right font-mono text-xs font-semibold text-slate-900 tabular-nums">
+                    <td className="py-3 px-4 text-right font-mono text-xs font-semibold text-[var(--av-text)] tabular-nums">
                       {emp.assigned_count ?? 0}
                     </td>
-                    <td className="py-2.5 px-4 text-xs font-medium whitespace-nowrap">
+                    <td className="py-3 px-4 text-xs font-semibold whitespace-nowrap">
                       <span
                         className={
                           emp.status === 'active'
-                            ? 'text-emerald-700'
-                            : 'text-slate-500'
+                            ? 'text-emerald-700 dark:text-emerald-400'
+                            : 'text-slate-500 dark:text-slate-400'
                         }
                       >
                         {emp.status === 'active' ? 'Active' : 'Inactive'}
                       </span>
                     </td>
-                    <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                    <td className="py-3 px-4 text-right whitespace-nowrap">
                       <div className="inline-flex items-center justify-end gap-1">
                         <button
                           type="button"
                           onClick={() => openDetail(emp)}
                           title="View assigned assets & history"
-                          className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                          className="p-1.5 rounded-md text-[var(--av-text-subtle)] hover:bg-[var(--av-surface-muted)] hover:text-[var(--av-text)] transition-colors"
                         >
                           <Eye className="h-4 w-4" />
                         </button>
@@ -319,7 +414,7 @@ export function EmployeesView({
                             type="button"
                             onClick={() => onRequestAssignToEmployee(emp)}
                             title="Assign asset to employee"
-                            className="p-1.5 rounded-md text-blue-700 hover:bg-blue-50"
+                            className="p-1.5 rounded-md text-[var(--av-accent)] hover:bg-[var(--av-accent-soft)] transition-colors"
                           >
                             <UserPlus className="h-4 w-4" />
                           </button>
@@ -328,7 +423,7 @@ export function EmployeesView({
                           type="button"
                           onClick={() => openEdit(emp)}
                           title="Edit employee"
-                          className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                          className="p-1.5 rounded-md text-[var(--av-text-subtle)] hover:bg-[var(--av-surface-muted)] hover:text-[var(--av-text)] transition-colors"
                         >
                           <Pencil className="h-4 w-4" />
                         </button>
@@ -337,7 +432,7 @@ export function EmployeesView({
                             type="button"
                             onClick={() => setDeleteTarget(emp)}
                             title="Delete employee"
-                            className="p-1.5 rounded-md text-slate-400 hover:bg-red-50 hover:text-red-700"
+                            className="p-1.5 rounded-md text-[var(--av-text-subtle)] hover:bg-red-50 dark:hover:bg-red-500/15 hover:text-red-600 dark:hover:text-red-400 transition-colors"
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
@@ -350,352 +445,392 @@ export function EmployeesView({
             </tbody>
           </table>
         </div>
+
+        <DataPagination
+          totalItems={filtered.length}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          itemLabel="employees"
+        />
       </div>
 
       {/* Add / Edit Employee Modal */}
-      {formOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-[1px] p-4"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="w-full max-w-xl rounded-xl border border-slate-200 bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-              <h3 className="font-display text-lg font-semibold text-slate-900">
-                {editingEmployee
-                  ? `Edit Employee · ${editingEmployee.employee_code}`
-                  : 'Register Employee'}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setFormOpen(false)}
-                className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                aria-label="Close modal"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
-              {formError && (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm text-red-800">
-                  {formError}
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Employee Code *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={form.employee_code}
-                    onChange={(e) =>
-                      setForm((f) => ({
-                        ...f,
-                        employee_code: e.target.value.toUpperCase(),
-                      }))
-                    }
-                    placeholder="e.g. EMP-1012"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-600 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Full Name *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={form.full_name}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, full_name: e.target.value }))
-                    }
-                    placeholder="e.g. Jordan Rivera"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Work Email *
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={form.email}
-                    onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-                    placeholder="jordan.rivera@company.com"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Department *
-                  </label>
-                  <select
-                    value={form.department}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, department: e.target.value }))
-                    }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
-                  >
-                    {DEPARTMENTS.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Job Title *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={form.job_title}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, job_title: e.target.value }))
-                    }
-                    placeholder="e.g. Senior Security Analyst"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Phone Number
-                  </label>
-                  <input
-                    type="text"
-                    value={form.phone}
-                    onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-                    placeholder="+1 (415) 555-0199"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Office Location
-                  </label>
-                  <input
-                    type="text"
-                    value={form.location}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, location: e.target.value }))
-                    }
-                    placeholder="e.g. HQ Floor 3 · Desk 3A"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Employment Status
-                  </label>
-                  <select
-                    value={form.status}
-                    onChange={(e) =>
-                      setForm((f) => ({
-                        ...f,
-                        status: e.target.value as 'active' | 'inactive',
-                      }))
-                    }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
-                  >
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-2.5 border-t border-slate-100 pt-4">
+      <AnimatePresence>
+        {formOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.14 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
+            role="dialog"
+            aria-modal="true"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.97, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.97, y: 8 }}
+              transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+              className="w-full max-w-xl rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-2xl overflow-hidden"
+            >
+              <div className="flex items-center justify-between border-b border-[var(--av-border-subtle)] px-6 py-4">
+                <h3 className="font-display text-base font-semibold text-[var(--av-text)]">
+                  {editingEmployee
+                    ? `Edit Employee · ${editingEmployee.employee_code}`
+                    : 'Register Employee'}
+                </h3>
                 <button
                   type="button"
                   onClick={() => setFormOpen(false)}
-                  className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  className="rounded-lg p-1.5 text-[var(--av-text-subtle)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                  aria-label="Close modal"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-800 disabled:opacity-60"
-                >
-                  {submitting
-                    ? 'Saving...'
-                    : editingEmployee
-                      ? 'Save Changes'
-                      : 'Register Employee'}
+                  <X className="h-4 w-4" />
                 </button>
               </div>
-            </form>
-          </div>
-        </div>
-      )}
 
-      {/* Employee Detail Drawer */}
-      {detailEmployee && (
-        <div
-          className="fixed inset-0 z-40 flex justify-end bg-slate-900/40 backdrop-blur-[1px]"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="w-full max-w-xl bg-white h-full border-l border-slate-200 flex flex-col shadow-2xl">
-            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-4">
-              <div>
-                <div className="font-mono text-xs font-semibold text-blue-700">
-                  {detailEmployee.employee_code}
+              <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+                {formError && (
+                  <div className="rounded-lg border border-red-300/80 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3.5 py-2.5 text-xs text-red-800 dark:text-red-300">
+                    {formError}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
+                      Employee Code *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={form.employee_code}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          employee_code: e.target.value.toUpperCase(),
+                        }))
+                      }
+                      placeholder="e.g. EMP-1012"
+                      className={`${INPUT_CLASS} font-mono`}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
+                      Full Name *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={form.full_name}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, full_name: e.target.value }))
+                      }
+                      placeholder="e.g. Jordan Rivera"
+                      className={INPUT_CLASS}
+                    />
+                  </div>
                 </div>
-                <h3 className="font-display text-lg font-semibold text-slate-900 mt-0.5">
-                  {detailEmployee.full_name}
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {detailEmployee.job_title} · {detailEmployee.department}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDetailEmployee(null)}
-                className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                aria-label="Close drawer"
-              >
-                <X className="h-4.5 w-4.5" />
-              </button>
-            </div>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {detailEmployee.status === 'active' && (
-                <div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
+                      Work Email *
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={form.email}
+                      onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                      placeholder="jordan.rivera@company.com"
+                      className={INPUT_CLASS}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
+                      Department *
+                    </label>
+                    <select
+                      value={form.department}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, department: e.target.value }))
+                      }
+                      className={INPUT_CLASS}
+                    >
+                      {DEPARTMENTS.map((d) => (
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
+                      Job Title *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={form.job_title}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, job_title: e.target.value }))
+                      }
+                      placeholder="e.g. Senior Security Analyst"
+                      className={INPUT_CLASS}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
+                      Phone Number
+                    </label>
+                    <input
+                      type="text"
+                      value={form.phone}
+                      onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                      placeholder="+1 (415) 555-0199"
+                      className={INPUT_CLASS}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
+                      Office Location
+                    </label>
+                    <input
+                      type="text"
+                      value={form.location}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, location: e.target.value }))
+                      }
+                      placeholder="e.g. HQ Floor 3 · Desk 3A"
+                      className={INPUT_CLASS}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
+                      Employment Status
+                    </label>
+                    <select
+                      value={form.status}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          status: e.target.value as 'active' | 'inactive',
+                        }))
+                      }
+                      className={INPUT_CLASS}
+                    >
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 border-t border-[var(--av-border-subtle)] pt-4">
                   <button
                     type="button"
-                    onClick={() => onRequestAssignToEmployee(detailEmployee)}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-700 px-3.5 py-2 text-xs font-medium text-white hover:bg-blue-800"
+                    onClick={() => setFormOpen(false)}
+                    className="rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-2 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
                   >
-                    <UserPlus className="h-3.5 w-3.5" />
-                    <span>Assign New Asset</span>
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors disabled:opacity-60"
+                  >
+                    {submitting
+                      ? 'Saving...'
+                      : editingEmployee
+                        ? 'Save Changes'
+                        : 'Register Employee'}
                   </button>
                 </div>
-              )}
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-              <div className="rounded-xl border border-slate-200 divide-y divide-slate-100 text-xs">
-                <div className="grid grid-cols-2 gap-4 p-4">
+      {/* Employee Detail Drawer */}
+      <AnimatePresence>
+        {detailEmployee && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.16 }}
+            onClick={() => setDetailEmployee(null)}
+            className="fixed inset-0 z-40 flex justify-end bg-slate-950/55 backdrop-blur-xs"
+            role="dialog"
+            aria-modal="true"
+          >
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-xl bg-[var(--av-surface)] h-full border-l border-[var(--av-border)] flex flex-col shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-[var(--av-border)] bg-[var(--av-surface-muted)] px-6 py-5">
+                <div>
+                  <div className="font-mono text-xs font-semibold text-[var(--av-accent)]">
+                    {detailEmployee.employee_code}
+                  </div>
+                  <h3 className="font-display text-lg font-bold text-[var(--av-text)] mt-0.5">
+                    {detailEmployee.full_name}
+                  </h3>
+                  <p className="text-xs text-[var(--av-text-subtle)] mt-0.5">
+                    {detailEmployee.job_title} · {detailEmployee.department}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDetailEmployee(null)}
+                  className="rounded-lg p-1.5 text-[var(--av-text-subtle)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                  aria-label="Close drawer"
+                >
+                  <X className="h-4.5 w-4.5" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {detailEmployee.status === 'active' && (
                   <div>
-                    <span className="text-slate-500">Email</span>
-                    <div className="mt-0.5 font-medium text-slate-900">
-                      {detailEmployee.email}
+                    <button
+                      type="button"
+                      onClick={() => onRequestAssignToEmployee(detailEmployee)}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors"
+                    >
+                      <UserPlus className="h-3.5 w-3.5" />
+                      <span>Assign New Asset</span>
+                    </button>
+                  </div>
+                )}
+
+                <div className="rounded-xl border border-[var(--av-border)] divide-y divide-[var(--av-border-subtle)] text-xs">
+                  <div className="grid grid-cols-2 gap-4 p-4">
+                    <div>
+                      <span className="text-[var(--av-text-subtle)]">Email</span>
+                      <div className="mt-0.5 font-semibold text-[var(--av-text)]">
+                        {detailEmployee.email}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-[var(--av-text-subtle)]">Phone</span>
+                      <div className="mt-0.5 font-semibold text-[var(--av-text)]">
+                        {detailEmployee.phone || '—'}
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <span className="text-slate-500">Phone</span>
-                    <div className="mt-0.5 font-medium text-slate-900">
-                      {detailEmployee.phone || '—'}
+                  <div className="grid grid-cols-2 gap-4 p-4">
+                    <div>
+                      <span className="text-[var(--av-text-subtle)]">Location</span>
+                      <div className="mt-0.5 font-semibold text-[var(--av-text)]">
+                        {detailEmployee.location}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-[var(--av-text-subtle)]">Status</span>
+                      <div className="mt-0.5 font-semibold text-[var(--av-text)] capitalize">
+                        {detailEmployee.status}
+                      </div>
                     </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4 p-4">
-                  <div>
-                    <span className="text-slate-500">Location</span>
-                    <div className="mt-0.5 font-medium text-slate-900">
-                      {detailEmployee.location}
+
+                <div>
+                  <h4 className="font-display text-sm font-semibold text-[var(--av-text)] mb-2.5">
+                    Currently Assigned Assets ({detailAssignedAssets.length})
+                  </h4>
+                  {detailLoading ? (
+                    <p className="text-xs text-[var(--av-text-subtle)]">
+                      Loading assigned hardware...
+                    </p>
+                  ) : detailAssignedAssets.length === 0 ? (
+                    <p className="text-xs text-[var(--av-text-subtle)] rounded-xl border border-[var(--av-border)] p-4">
+                      No IT equipment is currently assigned to this employee.
+                    </p>
+                  ) : (
+                    <div className="rounded-xl border border-[var(--av-border)] divide-y divide-[var(--av-border-subtle)]">
+                      {detailAssignedAssets.map((a) => (
+                        <div
+                          key={a.id}
+                          className="p-3.5 flex items-center justify-between gap-3 text-xs"
+                        >
+                          <div>
+                            <div className="font-semibold text-[var(--av-text)]">
+                              {a.name}
+                            </div>
+                            <div className="text-[var(--av-text-subtle)] mt-0.5">
+                              <span className="font-mono">{a.asset_tag}</span> ·{' '}
+                              {a.category} · SN:{' '}
+                              <span className="font-mono">{a.serial_number}</span>
+                            </div>
+                          </div>
+                          <div className="text-right font-mono text-[11px] text-[var(--av-text-subtle)] tabular-nums shrink-0">
+                            Issued {a.assigned_date}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  </div>
-                  <div>
-                    <span className="text-slate-500">Status</span>
-                    <div className="mt-0.5 font-medium text-slate-900 capitalize">
-                      {detailEmployee.status}
+                  )}
+                </div>
+
+                <div>
+                  <h4 className="font-display text-sm font-semibold text-[var(--av-text)] mb-2.5">
+                    Assignment History ({detailAssignments.length})
+                  </h4>
+                  {detailLoading ? (
+                    <p className="text-xs text-[var(--av-text-subtle)]">
+                      Loading assignment history...
+                    </p>
+                  ) : detailAssignments.length === 0 ? (
+                    <p className="text-xs text-[var(--av-text-subtle)] rounded-xl border border-[var(--av-border)] p-4">
+                      No historical assignment records found.
+                    </p>
+                  ) : (
+                    <div className="rounded-xl border border-[var(--av-border)] divide-y divide-[var(--av-border-subtle)]">
+                      {detailAssignments.map((asg) => (
+                        <div key={asg.id} className="p-3.5 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-[var(--av-text)]">
+                              {asg.asset_tag} · {asg.asset_name}
+                            </span>
+                            <span
+                              className={`font-semibold ${
+                                asg.status === 'Active'
+                                  ? 'text-[var(--av-accent)]'
+                                  : 'text-[var(--av-text-muted)]'
+                              }`}
+                            >
+                              {asg.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-[var(--av-text-subtle)] tabular-nums">
+                            {asg.handover_number} · Issued {asg.assigned_date}
+                            {asg.returned_date
+                              ? ` · Returned ${asg.returned_date} (${asg.condition_in})`
+                              : ''}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
-
-              <div>
-                <h4 className="font-display text-sm font-semibold text-slate-900 mb-2.5">
-                  Currently Assigned Assets ({detailAssignedAssets.length})
-                </h4>
-                {detailLoading ? (
-                  <p className="text-xs text-slate-500">Loading assigned hardware...</p>
-                ) : detailAssignedAssets.length === 0 ? (
-                  <p className="text-xs text-slate-500 rounded-lg border border-slate-200 p-4">
-                    No IT equipment is currently assigned to this employee.
-                  </p>
-                ) : (
-                  <div className="rounded-xl border border-slate-200 divide-y divide-slate-100">
-                    {detailAssignedAssets.map((a) => (
-                      <div
-                        key={a.id}
-                        className="p-3.5 flex items-center justify-between gap-3 text-xs"
-                      >
-                        <div>
-                          <div className="font-semibold text-slate-900">
-                            {a.name}
-                          </div>
-                          <div className="text-slate-500 mt-0.5">
-                            <span className="font-mono">{a.asset_tag}</span> ·{' '}
-                            {a.category} · SN: <span className="font-mono">{a.serial_number}</span>
-                          </div>
-                        </div>
-                        <div className="text-right font-mono text-[11px] text-slate-500 tabular-nums shrink-0">
-                          Issued {a.assigned_date}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <h4 className="font-display text-sm font-semibold text-slate-900 mb-2.5">
-                  Assignment History ({detailAssignments.length})
-                </h4>
-                {detailLoading ? (
-                  <p className="text-xs text-slate-500">Loading assignment history...</p>
-                ) : detailAssignments.length === 0 ? (
-                  <p className="text-xs text-slate-500 rounded-lg border border-slate-200 p-4">
-                    No historical assignment records found.
-                  </p>
-                ) : (
-                  <div className="rounded-xl border border-slate-200 divide-y divide-slate-100">
-                    {detailAssignments.map((asg) => (
-                      <div key={asg.id} className="p-3.5 text-xs">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-semibold text-slate-900">
-                            {asg.asset_tag} · {asg.asset_name}
-                          </span>
-                          <span
-                            className={`font-medium ${
-                              asg.status === 'Active'
-                                ? 'text-blue-700'
-                                : 'text-slate-600'
-                            }`}
-                          >
-                            {asg.status}
-                          </span>
-                        </div>
-                        <div className="mt-1 text-slate-500 tabular-nums">
-                          {asg.handover_number} · Issued {asg.assigned_date}
-                          {asg.returned_date
-                            ? ` · Returned ${asg.returned_date} (${asg.condition_in})`
-                            : ''}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <ConfirmDialog
         open={Boolean(deleteTarget)}

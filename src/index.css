@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-display: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -6,14 +7,81 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+:root,
+:root[data-theme="light"] {
+  --av-bg: #F8FAFC;
+  --av-surface: #FFFFFF;
+  --av-surface-muted: #F1F5F9;
+  --av-surface-hover: #F8FAFC;
+  --av-sidebar: #111827;
+  --av-sidebar-hover: rgba(255, 255, 255, 0.06);
+  --av-sidebar-active: rgba(59, 130, 246, 0.16);
+  --av-sidebar-border: rgba(255, 255, 255, 0.08);
+  --av-sidebar-text: #F8FAFC;
+  --av-sidebar-muted: #94A3B8;
+  --av-text: #0F172A;
+  --av-text-muted: #334155;
+  --av-text-subtle: #64748B;
+  --av-border: #E2E8F0;
+  --av-border-subtle: #F1F5F9;
+  --av-accent: #3B82F6;
+  --av-accent-hover: #2563EB;
+  --av-accent-soft: rgba(59, 130, 246, 0.12);
+  --av-accent-shadow: rgba(59, 130, 246, 0.25);
+  --av-teal: #14B8A6;
+  --av-teal-soft: rgba(20, 184, 166, 0.12);
+  --av-header-bg: rgba(255, 255, 255, 0.88);
+  --av-banner-bg: #111827;
+  --av-grid-line: rgba(15, 23, 42, 0.03);
+  --av-card-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --av-bg: #090E1A;
+  --av-surface: #111827;
+  --av-surface-muted: #182235;
+  --av-surface-hover: #1E293B;
+  --av-sidebar: #070B14;
+  --av-sidebar-hover: rgba(255, 255, 255, 0.06);
+  --av-sidebar-active: rgba(59, 130, 246, 0.18);
+  --av-sidebar-border: rgba(148, 163, 184, 0.12);
+  --av-sidebar-text: #F8FAFC;
+  --av-sidebar-muted: #94A3B8;
+  --av-text: #F8FAFC;
+  --av-text-muted: #CBD5E1;
+  --av-text-subtle: #94A3B8;
+  --av-border: rgba(148, 163, 184, 0.16);
+  --av-border-subtle: rgba(148, 163, 184, 0.09);
+  --av-accent: #3B82F6;
+  --av-accent-hover: #60A5FA;
+  --av-accent-soft: rgba(59, 130, 246, 0.18);
+  --av-accent-shadow: rgba(59, 130, 246, 0.34);
+  --av-teal: #14B8A6;
+  --av-teal-soft: rgba(20, 184, 166, 0.18);
+  --av-header-bg: rgba(17, 24, 39, 0.88);
+  --av-banner-bg: #111827;
+  --av-grid-line: rgba(148, 163, 184, 0.04);
+  --av-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+
 @layer base {
   body {
     font-family: var(--font-sans);
-    background-color: #F8FAFC;
-    color: #0F172A;
+    background-color: var(--av-bg);
+    color: var(--av-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+      color 180ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  h1, h2, h3, h4, .font-display {
+  h1,
+  h2,
+  h3,
+  h4,
+  .font-display {
     font-family: var(--font-display);
   }
 
@@ -22,8 +90,39 @@
   }
 }
 
+.av-grid-surface {
+  background-image:
+    linear-gradient(to right, var(--av-grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--av-grid-line) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.av-grid-dark {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+@keyframes av-float-slow {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(10px, -8px, 0) scale(1.04);
+  }
+}
+
+.av-ambient-orb {
+  animation: av-float-slow 12s ease-in-out infinite;
+  will-change: transform;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
