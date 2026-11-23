@@ -305,7 +305,7 @@ export function MaintenanceView({
             <span className="text-xs font-medium text-[var(--av-text-subtle)]">
               Total Maintenance Cost
             </span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--av-surface-muted)] text-[var(--av-text-muted)]">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 dark:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
               <DollarSign className="h-4 w-4" />
             </div>
           </div>
@@ -388,7 +388,7 @@ export function MaintenanceView({
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-4 shadow-[var(--av-card-shadow)]">
         <div className="flex flex-1 flex-wrap items-center gap-2.5">
           <div className="relative flex-1 min-w-[220px] max-w-sm">
-            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--av-text-subtle)]" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#3B66F6]" />
             <input
               type="text"
               value={search}
@@ -585,7 +585,7 @@ export function MaintenanceView({
                             type="button"
                             onClick={() => openEditModal(m)}
                             title="Edit maintenance log"
-                            className="p-1.5 rounded-md text-[var(--av-text-subtle)] hover:bg-[var(--av-surface-muted)] hover:text-[var(--av-text)] transition-colors"
+                            className="p-1.5 rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/15 transition-colors"
                           >
                             <Pencil className="h-4 w-4" />
                           </button>
@@ -594,7 +594,7 @@ export function MaintenanceView({
                               type="button"
                               onClick={() => setDeleteTarget(m)}
                               title="Delete log"
-                              className="p-1.5 rounded-md text-[var(--av-text-subtle)] hover:bg-red-50 dark:hover:bg-red-500/15 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+                              className="p-1.5 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/15 transition-colors"
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>

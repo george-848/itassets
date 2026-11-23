@@ -4,6 +4,7 @@ import {
   ArrowUpDown,
   Eye,
   HardDrive,
+  Loader2,
   Pencil,
   Plus,
   Search,
@@ -313,7 +314,7 @@ export function AssetsView({
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-4 shadow-[var(--av-card-shadow)]">
         <div className="flex flex-1 flex-wrap items-center gap-2.5">
           <div className="relative flex-1 min-w-[220px] max-w-sm">
-            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--av-text-subtle)]" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#3B66F6]" />
             <input
               type="text"
               value={search}
@@ -504,7 +505,7 @@ export function AssetsView({
                             type="button"
                             onClick={() => openDetail(asset.id)}
                             title="View details"
-                            className="p-1.5 rounded-md text-[var(--av-text-subtle)] hover:bg-[var(--av-surface-muted)] hover:text-[var(--av-text)] transition-colors"
+                            className="p-1.5 rounded-md text-sky-600 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-sky-500/15 transition-colors"
                           >
                             <Eye className="h-4 w-4" />
                           </button>
@@ -513,7 +514,7 @@ export function AssetsView({
                               type="button"
                               onClick={() => onRequestAssign(asset)}
                               title="Assign to employee"
-                              className="p-1.5 rounded-md text-[var(--av-accent)] hover:bg-[var(--av-accent-soft)] transition-colors"
+                              className="p-1.5 rounded-md text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/15 transition-colors"
                             >
                               <UserPlus className="h-4 w-4" />
                             </button>
@@ -530,7 +531,7 @@ export function AssetsView({
                             type="button"
                             onClick={() => openEditModal(asset)}
                             title="Edit asset"
-                            className="p-1.5 rounded-md text-[var(--av-text-subtle)] hover:bg-[var(--av-surface-muted)] hover:text-[var(--av-text)] transition-colors"
+                            className="p-1.5 rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/15 transition-colors"
                           >
                             <Pencil className="h-4 w-4" />
                           </button>
@@ -539,7 +540,7 @@ export function AssetsView({
                               type="button"
                               onClick={() => setDeleteTarget(asset)}
                               title="Delete asset"
-                              className="p-1.5 rounded-md text-[var(--av-text-subtle)] hover:bg-red-50 dark:hover:bg-red-500/15 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+                              className="p-1.5 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/15 transition-colors"
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
@@ -1092,9 +1093,13 @@ export function AssetsView({
                     Assignment History
                   </h4>
                   {detailLoading ? (
-                    <p className="text-xs text-[var(--av-text-subtle)]">
-                      Loading history...
-                    </p>
+                    <div className="space-y-2 rounded-xl border border-[var(--av-border)] p-3.5">
+                      <div className="flex items-center gap-2 text-xs text-[var(--av-text-subtle)]">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--av-accent)]" />
+                        <span>Loading assignment history...</span>
+                      </div>
+                      <div className="h-8 w-full rounded-lg av-shimmer" />
+                    </div>
                   ) : detailAssignments.length === 0 ? (
                     <p className="text-xs text-[var(--av-text-subtle)] rounded-xl border border-[var(--av-border)] p-4">
                       No previous assignment records for this asset.
@@ -1129,9 +1134,13 @@ export function AssetsView({
                     Maintenance & Service History
                   </h4>
                   {detailLoading ? (
-                    <p className="text-xs text-[var(--av-text-subtle)]">
-                      Loading service logs...
-                    </p>
+                    <div className="space-y-2 rounded-xl border border-[var(--av-border)] p-3.5">
+                      <div className="flex items-center gap-2 text-xs text-[var(--av-text-subtle)]">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--av-accent)]" />
+                        <span>Loading service logs...</span>
+                      </div>
+                      <div className="h-8 w-full rounded-lg av-shimmer" />
+                    </div>
                   ) : detailMaintenance.length === 0 ? (
                     <p className="text-xs text-[var(--av-text-subtle)] rounded-xl border border-[var(--av-border)] p-4">
                       No repairs or maintenance services recorded.

@@ -5,6 +5,7 @@ import {
   Eye,
   EyeOff,
   FileSpreadsheet,
+  Loader2,
   Lock,
   Mail,
   Server,
@@ -220,7 +221,7 @@ export function LoginView({ onSuccess }: LoginViewProps) {
           </div>
 
           <div className="flex items-start gap-4 pt-4">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-500/15 text-[#60A5FA]">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-400">
               <FileSpreadsheet className="h-4.5 w-4.5" />
             </div>
             <div>
@@ -281,7 +282,7 @@ export function LoginView({ onSuccess }: LoginViewProps) {
                 Work Email
               </label>
               <div className="relative">
-                <Mail className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--av-text-subtle)]" />
+                <Mail className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#3B66F6] dark:text-blue-400" />
                 <input
                   id="login-email"
                   type="email"
@@ -303,7 +304,7 @@ export function LoginView({ onSuccess }: LoginViewProps) {
                 Password
               </label>
               <div className="relative">
-                <Lock className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--av-text-subtle)]" />
+                <Lock className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-indigo-500 dark:text-indigo-400" />
                 <input
                   id="login-password"
                   type={showPassword ? 'text' : 'password'}
@@ -335,6 +336,7 @@ export function LoginView({ onSuccess }: LoginViewProps) {
               disabled={loading || googleLoading || githubLoading}
               className="w-full mt-2 inline-flex items-center justify-center gap-2 rounded-lg bg-[var(--av-accent)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors focus-visible:outline-2 focus-visible:outline-[var(--av-accent)] disabled:opacity-60"
             >
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
               <span>{loading ? 'Verifying credentials...' : 'Sign In'}</span>
               {!loading && <ArrowRight className="h-4 w-4" />}
             </motion.button>
@@ -357,33 +359,37 @@ export function LoginView({ onSuccess }: LoginViewProps) {
               className="gsi-material-button w-full flex items-center justify-center gap-2 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3.5 py-2.5 text-sm font-medium text-[var(--av-text)] hover:bg-[var(--av-surface-hover)] transition-colors focus-visible:outline-2 focus-visible:outline-[var(--av-accent)] disabled:opacity-60"
             >
               <span className="gsi-material-button-icon h-4 w-4 shrink-0" aria-hidden="true">
-                <svg
-                  version="1.1"
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 48 48"
-                  className="block h-full w-full"
-                >
-                  <path
-                    fill="#EA4335"
-                    d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
-                  />
-                  <path
-                    fill="#4285F4"
-                    d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
-                  />
-                  <path fill="none" d="M0 0h48v48H0z" />
-                </svg>
+                {googleLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-[var(--av-accent)]" />
+                ) : (
+                  <svg
+                    version="1.1"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 48 48"
+                    className="block h-full w-full"
+                  >
+                    <path
+                      fill="#EA4335"
+                      d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+                    />
+                    <path
+                      fill="#4285F4"
+                      d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+                    />
+                    <path fill="none" d="M0 0h48v48H0z" />
+                  </svg>
+                )}
               </span>
               <span className="gsi-material-button-contents whitespace-nowrap">
-                {googleLoading ? 'Google...' : 'Google'}
+                {googleLoading ? 'Connecting...' : 'Google'}
               </span>
             </motion.button>
 
@@ -395,16 +401,20 @@ export function LoginView({ onSuccess }: LoginViewProps) {
               className="w-full flex items-center justify-center gap-2 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3.5 py-2.5 text-sm font-medium text-[var(--av-text)] hover:bg-[var(--av-surface-hover)] transition-colors focus-visible:outline-2 focus-visible:outline-[var(--av-accent)] disabled:opacity-60"
             >
               <span className="h-4 w-4 shrink-0" aria-hidden="true">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  className="block h-full w-full"
-                >
-                  <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12Z" />
-                </svg>
+                {githubLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-[var(--av-accent)]" />
+                ) : (
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    className="block h-full w-full"
+                  >
+                    <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12Z" />
+                  </svg>
+                )}
               </span>
               <span className="whitespace-nowrap">
-                {githubLoading ? 'GitHub...' : 'GitHub'}
+                {githubLoading ? 'Connecting...' : 'GitHub'}
               </span>
             </motion.button>
           </div>

@@ -249,7 +249,7 @@ export function AssignmentsView({
           </div>
 
           <div className="relative min-w-[230px]">
-            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--av-text-subtle)]" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#3B66F6]" />
             <input
               type="text"
               value={search}
@@ -381,7 +381,7 @@ export function AssignmentsView({
                           className="inline-flex items-center gap-1 rounded-md border border-[var(--av-border)] bg-[var(--av-surface)] px-2.5 py-1.5 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
                           title="Download Handover PDF"
                         >
-                          <FileDown className="h-3.5 w-3.5" />
+                          <FileDown className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400" />
                           <span>Handover PDF</span>
                         </button>
                         {asg.status === 'Active' && (

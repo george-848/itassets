@@ -32,6 +32,7 @@ import { NotificationsView } from './components/NotificationsView.tsx';
 import { ReportsView } from './components/ReportsView.tsx';
 import { ThemeSwitcher } from './components/ThemeSwitcher.tsx';
 import { ToastContainer, type ToastMessage } from './components/Toast.tsx';
+import { AppLoader } from './components/ui/AppLoader.tsx';
 import { GlobalSearchModal } from './components/ui/GlobalSearchModal.tsx';
 import { SupportModal } from './components/ui/SupportModal.tsx';
 import { UsersView } from './components/UsersView.tsx';
@@ -327,21 +328,7 @@ export default function App() {
   if (!authChecked) {
     return (
       <MotionConfig reducedMotion="user">
-        <div className="min-h-screen bg-[var(--av-bg)] av-grid-surface flex items-center justify-center transition-colors duration-200">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="text-center"
-          >
-            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-[#111827] text-white shadow-lg border border-white/10">
-              <Server className="h-5 w-5 text-[#3B82F6]" />
-            </div>
-            <p className="mt-3 font-display text-sm font-semibold text-[var(--av-text-muted)]">
-              Loading AssetVault IT...
-            </p>
-          </motion.div>
-        </div>
+        <AppLoader label="Verifying session & loading workspace..." />
       </MotionConfig>
     );
   }
@@ -359,26 +346,28 @@ export default function App() {
     id: NavSection;
     label: string;
     icon: typeof LayoutDashboard;
+    iconColor: string;
     group: 'operations' | 'governance';
     badge?: number;
     adminOnly?: boolean;
   };
 
   const navItems: NavItem[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, group: 'operations' },
-    { id: 'assets', label: 'Asset Inventory', icon: HardDrive, group: 'operations' },
-    { id: 'employees', label: 'Employees', icon: Users, group: 'operations' },
-    { id: 'assignments', label: 'Assignments', icon: ArrowLeftRight, group: 'operations' },
-    { id: 'maintenance', label: 'Maintenance', icon: Wrench, group: 'operations' },
-    { id: 'reports', label: 'Reports', icon: FileBarChart2, group: 'governance' },
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, iconColor: 'text-sky-400', group: 'operations' },
+    { id: 'assets', label: 'Asset Inventory', icon: HardDrive, iconColor: 'text-indigo-400', group: 'operations' },
+    { id: 'employees', label: 'Employees', icon: Users, iconColor: 'text-teal-400', group: 'operations' },
+    { id: 'assignments', label: 'Assignments', icon: ArrowLeftRight, iconColor: 'text-violet-400', group: 'operations' },
+    { id: 'maintenance', label: 'Maintenance', icon: Wrench, iconColor: 'text-amber-400', group: 'operations' },
+    { id: 'reports', label: 'Reports', icon: FileBarChart2, iconColor: 'text-emerald-400', group: 'governance' },
     {
       id: 'notifications',
       label: 'Notifications',
       icon: Bell,
+      iconColor: 'text-rose-400',
       group: 'governance',
       badge: unreadCount > 0 ? unreadCount : undefined,
     },
-    { id: 'users', label: 'User Management', icon: Shield, group: 'governance', adminOnly: true },
+    { id: 'users', label: 'User Management', icon: Shield, iconColor: 'text-cyan-400', group: 'governance', adminOnly: true },
   ];
 
   const visibleNavItems = navItems.filter(
@@ -410,33 +399,26 @@ export default function App() {
           title={collapsed ? item.label : undefined}
           aria-current={isActive ? 'page' : undefined}
           className={`group relative w-full flex items-center ${
-            collapsed ? 'justify-center px-2.5' : 'justify-between px-3'
-          } gap-3 rounded-lg py-2 text-[13px] font-medium transition-colors whitespace-nowrap ${
+            collapsed ? 'justify-center px-2.5' : 'justify-between px-3.5'
+          } gap-3 rounded-xl py-2.5 text-[13px] font-medium transition-colors whitespace-nowrap ${
             isActive
               ? 'text-white'
-              : 'text-slate-400 hover:bg-white/[0.05] hover:text-slate-100'
+              : 'text-slate-300/80 hover:bg-white/[0.06] hover:text-white'
           }`}
         >
           {isActive && (
             <motion.span
               layoutId={`sidebar-active-${scope}`}
               transition={{ type: 'spring', stiffness: 450, damping: 36 }}
-              className="absolute inset-0 rounded-lg bg-[#3B82F6]/15 border border-[#3B82F6]/25"
+              className="absolute inset-0 rounded-xl bg-[#3B66F6] shadow-[0_8px_20px_-4px_rgba(59,102,246,0.5)]"
             />
           )}
-          {isActive && !collapsed && (
-            <motion.span
-              layoutId={`sidebar-rail-${scope}`}
-              transition={{ type: 'spring', stiffness: 450, damping: 36 }}
-              className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-[#3B82F6]"
-            />
-          )}
-          <span className="relative z-10 flex items-center gap-2.5 min-w-0">
+          <span className="relative z-10 flex items-center gap-3 min-w-0">
             <Icon
               className={`h-4 w-4 shrink-0 transition-colors ${
                 isActive
-                  ? 'text-[#60A5FA]'
-                  : 'text-slate-400 group-hover:text-slate-200'
+                  ? 'text-white'
+                  : `${item.iconColor} group-hover:text-white`
               }`}
             />
             {!collapsed && <span className="truncate">{item.label}</span>}
@@ -445,7 +427,7 @@ export default function App() {
             <span
               className={`relative z-10 font-mono text-[11px] font-semibold tabular-nums px-1.5 py-0.5 rounded-md ${
                 isActive
-                  ? 'bg-[#3B82F6]/30 text-blue-100'
+                  ? 'bg-white/20 text-white'
                   : 'bg-red-600 text-white'
               }`}
             >
@@ -463,16 +445,16 @@ export default function App() {
         {/* Top Brand + Collapse Control */}
         <div
           className={`flex items-center ${
-            collapsed ? 'justify-center px-3' : 'justify-between px-4'
-          } h-14 border-b border-[var(--av-sidebar-border)] shrink-0`}
+            collapsed ? 'justify-center px-3' : 'justify-between px-5'
+          } h-16 shrink-0`}
         >
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#3B82F6] text-white shrink-0 shadow-xs">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#3B66F6] text-white shrink-0 shadow-[0_4px_12px_rgba(59,102,246,0.4)]">
               <Server className="h-4 w-4" />
             </div>
             {!collapsed && (
-              <span className="font-display text-[15px] font-bold tracking-tight text-white whitespace-nowrap truncate">
-                AssetVault IT
+              <span className="font-display text-[17px] font-bold tracking-tight text-white whitespace-nowrap truncate">
+                AssetVault
               </span>
             )}
           </div>
@@ -502,7 +484,7 @@ export default function App() {
         </div>
 
         {/* Navigation Sections */}
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+        <nav className="flex-1 overflow-y-auto px-3.5 py-2 space-y-5">
           {collapsed && scope === 'desktop' && (
             <div className="flex justify-center pb-1">
               <button
@@ -519,7 +501,7 @@ export default function App() {
 
           <div>
             {!collapsed && (
-              <div className="px-3 mb-2 text-[11px] font-semibold tracking-wide text-slate-500">
+              <div className="px-3.5 mb-2 text-[11px] font-semibold tracking-wide text-slate-500">
                 Core Operations
               </div>
             )}
@@ -530,21 +512,35 @@ export default function App() {
 
           <div>
             {!collapsed && (
-              <div className="px-3 mb-2 text-[11px] font-semibold tracking-wide text-slate-500">
-                Governance & Reports
+              <div className="px-3.5 mb-2 text-[11px] font-semibold tracking-wide text-slate-500">
+                Governance &amp; Reports
               </div>
             )}
             <div className="space-y-1">
               {renderNavGroup(governanceItems, scope, collapsed)}
             </div>
+
+            {!collapsed && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setSupportOpen(true);
+                }}
+                className="mt-1 w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13px] font-medium text-slate-300/80 hover:bg-white/[0.06] hover:text-white transition-colors whitespace-nowrap"
+              >
+                <HelpCircle className="h-4 w-4 shrink-0 text-sky-400" />
+                <span>Help &amp; Shortcuts</span>
+              </button>
+            )}
           </div>
         </nav>
 
         {/* Bottom Appearance & Profile Section */}
-        <div className="border-t border-[var(--av-sidebar-border)] p-3 bg-white/[0.015] space-y-3 shrink-0">
+        <div className="border-t border-[var(--av-sidebar-border)] p-3.5 bg-white/[0.015] space-y-3 shrink-0">
           <ThemeSwitcher variant="sidebar" collapsed={collapsed} />
 
-          <div className="pt-2 border-t border-[var(--av-sidebar-border)]">
+          <div className="pt-2.5 border-t border-[var(--av-sidebar-border)]">
             <div
               className={`flex items-center ${
                 collapsed ? 'justify-center' : 'gap-2.5'
@@ -552,7 +548,7 @@ export default function App() {
             >
               <div
                 title={`${currentUser.name} (${currentUser.email})`}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#3B82F6]/20 border border-[#3B82F6]/30 font-display text-xs font-bold text-[#93C5FD]"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#3B66F6]/25 border border-[#3B66F6]/40 font-display text-xs font-bold text-[#93C5FD]"
               >
                 {initials}
               </div>
@@ -572,9 +568,9 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleLogout}
-                className="mt-2.5 w-full inline-flex items-center justify-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-white/[0.08] hover:text-white transition-colors"
+                className="mt-2.5 w-full inline-flex items-center justify-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-white/[0.09] hover:text-white transition-colors"
               >
-                <LogOut className="h-3.5 w-3.5" />
+                <LogOut className="h-3.5 w-3.5 text-rose-400" />
                 <span>Sign Out</span>
               </button>
             )}
@@ -589,6 +585,22 @@ export default function App() {
   return (
     <MotionConfig reducedMotion="user">
       <div className="min-h-screen bg-[var(--av-bg)] text-[var(--av-text)] flex transition-colors duration-200 overflow-x-clip">
+        {/* Live Workspace Sync Top Progress Bar */}
+        <AnimatePresence>
+          {dataLoading && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="fixed top-0 left-0 right-0 z-50 h-0.5 overflow-hidden bg-transparent pointer-events-none"
+              aria-hidden="true"
+            >
+              <div className="h-full w-1/3 bg-gradient-to-r from-[#3B66F6] via-[#60A5FA] to-[#1AB394] av-progress-sweep" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Collapsible Desktop Sidebar */}
         <aside
           className={`hidden lg:block shrink-0 border-r border-[var(--av-border)] sticky top-0 h-screen transition-[width] duration-200 ease-out ${
@@ -626,43 +638,47 @@ export default function App() {
         {/* Main Content Viewport */}
         <div className="flex-1 min-w-0 flex flex-col">
           {/* Top Navigation Header */}
-          <header className="sticky top-0 z-30 h-14 border-b border-[var(--av-border)] bg-[var(--av-header-bg)] backdrop-blur-md px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4 transition-colors duration-200">
-            {/* Left: Mobile Drawer Button + Breadcrumb & Page Title */}
-            <div className="flex items-center gap-3 min-w-0">
+          <header className="sticky top-0 z-30 h-16 border-b border-[var(--av-border)] bg-[var(--av-header-bg)] backdrop-blur-md px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4 transition-colors duration-200">
+            {/* Left: Mobile Drawer Button + Prominent Rounded Global Search + Breadcrumb */}
+            <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
               <button
                 type="button"
                 onClick={() => setMobileMenuOpen(true)}
-                className="lg:hidden rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] p-2 text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] transition-colors"
+                className="lg:hidden rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-2 text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] transition-colors shrink-0"
                 aria-label="Open navigation menu"
               >
                 <Menu className="h-4 w-4" />
               </button>
-              <div className="flex items-center gap-1.5 text-xs text-[var(--av-text-subtle)] min-w-0">
-                <span className="hidden sm:inline font-medium whitespace-nowrap">
+
+              {/* Prominent Rounded Search Trigger (matching reference) */}
+              <button
+                type="button"
+                onClick={() => setSearchOpen(true)}
+                className="inline-flex items-center justify-between gap-3 rounded-full border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-2 text-xs text-[var(--av-text-subtle)] shadow-[var(--av-card-shadow)] hover:border-[var(--av-accent)]/40 hover:text-[var(--av-text)] transition-all w-full max-w-xs sm:max-w-sm"
+                aria-label="Search workspace"
+              >
+                <span className="flex items-center gap-2.5 min-w-0">
+                  <Search className="h-3.5 w-3.5 text-[#3B66F6] shrink-0" />
+                  <span className="truncate">Search assets, employees, tags...</span>
+                </span>
+                <kbd className="hidden sm:inline-block rounded-md border border-[var(--av-border)] bg-[var(--av-surface-muted)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--av-text-subtle)] shrink-0">
+                  ⌘K
+                </kbd>
+              </button>
+
+              <div className="hidden xl:flex items-center gap-1.5 text-xs text-[var(--av-text-subtle)] min-w-0 pl-1">
+                <span className="font-medium whitespace-nowrap">
                   {meta.group}
                 </span>
-                <ChevronRight className="hidden sm:inline h-3.5 w-3.5 opacity-60 shrink-0" />
-                <span className="font-display text-sm font-semibold text-[var(--av-text)] truncate">
+                <ChevronRight className="h-3.5 w-3.5 opacity-60 shrink-0" />
+                <span className="font-display text-xs font-semibold text-[var(--av-text)] truncate">
                   {meta.label}
                 </span>
               </div>
             </div>
 
-            {/* Right: Global Search, Light/Dark Toggle, Notifications Popover, Help, Profile Dropdown */}
+            {/* Right: Light/Dark Toggle, Notifications Popover, Help, Profile Dropdown */}
             <div className="flex items-center gap-2 shrink-0">
-              {/* Global Search */}
-              <button
-                type="button"
-                onClick={() => setSearchOpen(true)}
-                className="inline-flex items-center gap-2 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface-muted)] px-2.5 sm:px-3 py-1.5 text-xs text-[var(--av-text-subtle)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap shrink-0"
-                aria-label="Search workspace"
-              >
-                <Search className="h-3.5 w-3.5 shrink-0" />
-                <span className="hidden md:inline">Search assets, staff...</span>
-                <kbd className="hidden lg:inline-block rounded border border-[var(--av-border)] bg-[var(--av-surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--av-text-subtle)]">
-                  ⌘K
-                </kbd>
-              </button>
 
               {/* Light / Dark Toggle */}
               <ThemeSwitcher variant="icon" />
@@ -677,7 +693,7 @@ export default function App() {
                   }}
                   aria-label="Notifications"
                   aria-expanded={notifPopoverOpen}
-                  className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors shrink-0"
+                  className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] text-amber-500 dark:text-amber-400 hover:bg-[var(--av-surface-hover)] transition-colors shrink-0"
                 >
                   <Bell className="h-4 w-4" />
                   {unreadCount > 0 && (
@@ -757,7 +773,7 @@ export default function App() {
                 onClick={() => setSupportOpen(true)}
                 title="Help & shortcuts"
                 aria-label="Help and keyboard shortcuts"
-                className="hidden sm:inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors shrink-0"
+                className="hidden sm:inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] text-[#1AB394] hover:bg-[var(--av-surface-hover)] transition-colors shrink-0"
               >
                 <HelpCircle className="h-4 w-4" />
               </button>
@@ -813,9 +829,9 @@ export default function App() {
                         >
                           <span className="flex items-center gap-2">
                             {isDark ? (
-                              <Sun className="h-3.5 w-3.5" />
+                              <Sun className="h-3.5 w-3.5 text-amber-400" />
                             ) : (
-                              <Moon className="h-3.5 w-3.5" />
+                              <Moon className="h-3.5 w-3.5 text-indigo-500" />
                             )}
                             <span>{isDark ? 'Light Mode' : 'Dark Mode'}</span>
                           </span>
@@ -829,7 +845,7 @@ export default function App() {
                           }}
                           className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
                         >
-                          <HelpCircle className="h-3.5 w-3.5" />
+                          <HelpCircle className="h-3.5 w-3.5 text-[#1AB394]" />
                           <span>Help & Shortcuts</span>
                         </button>
 
@@ -839,7 +855,7 @@ export default function App() {
                             onClick={() => navigateTo('users')}
                             className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
                           >
-                            <Shield className="h-3.5 w-3.5" />
+                            <Shield className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
                             <span>User Management</span>
                           </button>
                         )}

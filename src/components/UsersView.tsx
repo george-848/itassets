@@ -221,7 +221,7 @@ export function UsersView({
         </div>
 
         <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-4.5 shadow-[var(--av-card-shadow)] flex items-start gap-3.5">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--av-surface-muted)] text-[var(--av-text-muted)]">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 dark:bg-teal-500/15 text-teal-600 dark:text-teal-400">
             <UserCog className="h-4.5 w-4.5" />
           </div>
           <div>
@@ -240,7 +240,7 @@ export function UsersView({
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-4 shadow-[var(--av-card-shadow)]">
         <div className="flex flex-1 flex-wrap items-center gap-2.5">
           <div className="relative flex-1 min-w-[220px] max-w-sm">
-            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--av-text-subtle)]" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#3B66F6]" />
             <input
               type="text"
               value={search}
@@ -431,7 +431,7 @@ export function UsersView({
                           type="button"
                           onClick={() => openEdit(u)}
                           title="Edit user"
-                          className="p-1.5 rounded-md text-[var(--av-text-subtle)] hover:bg-[var(--av-surface-muted)] hover:text-[var(--av-text)] transition-colors"
+                          className="p-1.5 rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/15 transition-colors"
                         >
                           <Pencil className="h-4 w-4" />
                         </button>
@@ -440,7 +440,7 @@ export function UsersView({
                             type="button"
                             onClick={() => setDeleteTarget(u)}
                             title="Delete user"
-                            className="p-1.5 rounded-md text-[var(--av-text-subtle)] hover:bg-red-50 dark:hover:bg-red-500/15 hover:text-red-700 dark:hover:text-red-400 transition-colors"
+                            className="p-1.5 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/15 transition-colors"
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>

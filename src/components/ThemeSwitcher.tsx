@@ -22,7 +22,11 @@ export function ThemeSwitcher({
         aria-label={isDark ? 'Switch to Light mode' : 'Switch to Dark mode'}
         className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors shrink-0"
       >
-        {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+        {isDark ? (
+          <Sun className="h-4 w-4 text-amber-400" />
+        ) : (
+          <Moon className="h-4 w-4 text-indigo-500" />
+        )}
       </button>
     );
   }
@@ -35,9 +39,13 @@ export function ThemeSwitcher({
           onClick={toggleTheme}
           title={isDark ? 'Switch to Light mode' : 'Switch to Dark mode'}
           aria-label={isDark ? 'Switch to Light mode' : 'Switch to Dark mode'}
-          className="w-full flex h-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08] hover:text-white transition-colors"
+          className="w-full flex h-9 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] hover:bg-white/[0.08] transition-colors"
         >
-          {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          {isDark ? (
+            <Sun className="h-4 w-4 text-amber-400" />
+          ) : (
+            <Moon className="h-4 w-4 text-sky-300" />
+          )}
         </button>
       );
     }
@@ -75,7 +83,11 @@ export function ThemeSwitcher({
                   className="absolute inset-0 rounded-md bg-white/[0.12] border border-white/[0.12]"
                 />
               )}
-              <Icon className="relative z-10 h-3.5 w-3.5 shrink-0" />
+              <Icon
+                className={`relative z-10 h-3.5 w-3.5 shrink-0 ${
+                  item.id === 'light' ? 'text-amber-400' : 'text-indigo-300'
+                }`}
+              />
               <span className="relative z-10">{item.label}</span>
             </button>
           );
@@ -117,7 +129,13 @@ export function ThemeSwitcher({
                 className="absolute inset-0 rounded-md bg-[var(--av-surface-muted)] border border-[var(--av-border)]"
               />
             )}
-            <Icon className="relative z-10 h-3.5 w-3.5 shrink-0" />
+            <Icon
+              className={`relative z-10 h-3.5 w-3.5 shrink-0 ${
+                item.id === 'light'
+                  ? 'text-amber-500 dark:text-amber-400'
+                  : 'text-indigo-500 dark:text-indigo-400'
+              }`}
+            />
             <span className="relative z-10">{item.label}</span>
           </button>
         );

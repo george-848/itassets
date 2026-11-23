@@ -9,60 +9,60 @@
 
 :root,
 :root[data-theme="light"] {
-  --av-bg: #F8FAFC;
+  --av-bg: #F5F7FB;
   --av-surface: #FFFFFF;
   --av-surface-muted: #F1F5F9;
   --av-surface-hover: #F8FAFC;
-  --av-sidebar: #111827;
-  --av-sidebar-hover: rgba(255, 255, 255, 0.06);
-  --av-sidebar-active: rgba(59, 130, 246, 0.16);
+  --av-sidebar: #080D21;
+  --av-sidebar-hover: rgba(255, 255, 255, 0.07);
+  --av-sidebar-active: #3B66F6;
   --av-sidebar-border: rgba(255, 255, 255, 0.08);
   --av-sidebar-text: #F8FAFC;
   --av-sidebar-muted: #94A3B8;
   --av-text: #0F172A;
   --av-text-muted: #334155;
   --av-text-subtle: #64748B;
-  --av-border: #E2E8F0;
+  --av-border: #E8EEF5;
   --av-border-subtle: #F1F5F9;
-  --av-accent: #3B82F6;
-  --av-accent-hover: #2563EB;
-  --av-accent-soft: rgba(59, 130, 246, 0.12);
-  --av-accent-shadow: rgba(59, 130, 246, 0.25);
-  --av-teal: #14B8A6;
-  --av-teal-soft: rgba(20, 184, 166, 0.12);
-  --av-header-bg: rgba(255, 255, 255, 0.88);
-  --av-banner-bg: #111827;
+  --av-accent: #3B66F6;
+  --av-accent-hover: #2952E3;
+  --av-accent-soft: rgba(59, 102, 246, 0.12);
+  --av-accent-shadow: rgba(59, 102, 246, 0.32);
+  --av-teal: #1AB394;
+  --av-teal-soft: rgba(26, 179, 148, 0.12);
+  --av-header-bg: rgba(245, 247, 251, 0.88);
+  --av-banner-bg: #080D21;
   --av-grid-line: rgba(15, 23, 42, 0.03);
-  --av-card-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --av-card-shadow: 0 4px 20px -4px rgba(15, 23, 42, 0.05), 0 1px 3px rgba(15, 23, 42, 0.03);
   color-scheme: light;
 }
 
 :root[data-theme="dark"] {
-  --av-bg: #090E1A;
+  --av-bg: #070B16;
   --av-surface: #111827;
   --av-surface-muted: #182235;
   --av-surface-hover: #1E293B;
-  --av-sidebar: #070B14;
-  --av-sidebar-hover: rgba(255, 255, 255, 0.06);
-  --av-sidebar-active: rgba(59, 130, 246, 0.18);
+  --av-sidebar: #050814;
+  --av-sidebar-hover: rgba(255, 255, 255, 0.07);
+  --av-sidebar-active: #3B66F6;
   --av-sidebar-border: rgba(148, 163, 184, 0.12);
   --av-sidebar-text: #F8FAFC;
   --av-sidebar-muted: #94A3B8;
   --av-text: #F8FAFC;
   --av-text-muted: #CBD5E1;
   --av-text-subtle: #94A3B8;
-  --av-border: rgba(148, 163, 184, 0.16);
+  --av-border: rgba(148, 163, 184, 0.15);
   --av-border-subtle: rgba(148, 163, 184, 0.09);
-  --av-accent: #3B82F6;
-  --av-accent-hover: #60A5FA;
-  --av-accent-soft: rgba(59, 130, 246, 0.18);
-  --av-accent-shadow: rgba(59, 130, 246, 0.34);
-  --av-teal: #14B8A6;
-  --av-teal-soft: rgba(20, 184, 166, 0.18);
-  --av-header-bg: rgba(17, 24, 39, 0.88);
-  --av-banner-bg: #111827;
+  --av-accent: #3B66F6;
+  --av-accent-hover: #5B82F8;
+  --av-accent-soft: rgba(59, 102, 246, 0.2);
+  --av-accent-shadow: rgba(59, 102, 246, 0.4);
+  --av-teal: #1AB394;
+  --av-teal-soft: rgba(26, 179, 148, 0.18);
+  --av-header-bg: rgba(7, 11, 22, 0.88);
+  --av-banner-bg: #050814;
   --av-grid-line: rgba(148, 163, 184, 0.04);
-  --av-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --av-card-shadow: 0 6px 24px -6px rgba(0, 0, 0, 0.45);
   color-scheme: dark;
 }
 
@@ -116,6 +116,59 @@
 
 .av-ambient-orb {
   animation: av-float-slow 12s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes av-shimmer-sweep {
+  0% {
+    transform: translate3d(-100%, 0, 0);
+  }
+  100% {
+    transform: translate3d(100%, 0, 0);
+  }
+}
+
+.av-shimmer {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--av-surface-muted);
+}
+
+.av-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translate3d(-100%, 0, 0);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.5) 50%,
+    transparent 100%
+  );
+  animation: av-shimmer-sweep 1.45s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform;
+}
+
+:root[data-theme="dark"] .av-shimmer::after {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(148, 163, 184, 0.14) 50%,
+    transparent 100%
+  );
+}
+
+@keyframes av-indeterminate {
+  0% {
+    transform: translate3d(-100%, 0, 0);
+  }
+  100% {
+    transform: translate3d(260%, 0, 0);
+  }
+}
+
+.av-progress-sweep {
+  animation: av-indeterminate 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
   will-change: transform;
 }
 

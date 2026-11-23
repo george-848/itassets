@@ -110,7 +110,7 @@ export function SupportModal({ open, onClose }: SupportModalProps) {
               </div>
 
               <div className="flex items-start gap-3 border-t border-[var(--av-border-subtle)] pt-4">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--av-surface-muted)] text-[var(--av-text-muted)]">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-50 dark:bg-violet-500/15 text-violet-600 dark:text-violet-400">
                   <ShieldCheck className="h-4 w-4" />
                 </div>
                 <div>
@@ -126,7 +126,7 @@ export function SupportModal({ open, onClose }: SupportModalProps) {
               </div>
 
               <div className="flex items-start gap-3 border-t border-[var(--av-border-subtle)] pt-4">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--av-surface-muted)] text-[var(--av-text-muted)]">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50 dark:bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
                   <FileBarChart2 className="h-4 w-4" />
                 </div>
                 <div>
