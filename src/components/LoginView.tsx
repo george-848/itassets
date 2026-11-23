@@ -16,6 +16,7 @@ import { api, ApiError } from '../lib/api.ts';
 import { googleSignIn } from '../lib/googleAuth.ts';
 import type { User } from '../types/itams.ts';
 import { ThemeSwitcher } from './ThemeSwitcher.tsx';
+import { FlyingStarsCanvas } from './ui/FlyingStarsCanvas.tsx';
 
 interface LoginViewProps {
   onSuccess: (token: string, user: User) => void;
@@ -148,6 +149,8 @@ export function LoginView({ onSuccess }: LoginViewProps) {
 
       {/* Left Enterprise Architectural Panel (Desktop only) */}
       <div className="hidden lg:flex lg:w-[46%] relative overflow-hidden bg-[#111827] av-grid-dark text-white p-14 flex-col justify-between border-r border-white/[0.08]">
+        <FlyingStarsCanvas />
+
         <div
           aria-hidden="true"
           className="av-ambient-orb pointer-events-none absolute -top-24 -left-24 h-80 w-80 rounded-full opacity-20 blur-3xl bg-[#3B82F6]"
