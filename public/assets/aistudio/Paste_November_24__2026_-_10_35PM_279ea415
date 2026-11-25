@@ -1,0 +1,1197 @@
+MASTER IMPLEMENTATION PROMPT — IT ASSET VAULT MULTI-TENANT SaaS PLATFORM
+
+PROJECT OBJECTIVE
+
+Upgrade my existing IT Asset Vault application into a production-ready, commercial, multi-tenant SaaS platform for IT Asset Management (ITAM), IT Helpdesk and IT Service Management (ITSM).
+
+The application must support two customer categories:
+
+1. Companies and organisations managing their own IT assets, employees, departments, locations and IT support operations.
+2. IT service providers and Managed Service Providers (MSPs) managing multiple client organisations from one central dashboard.
+
+The business model must support shared SaaS subscriptions for normal customers and optional dedicated Enterprise deployments.
+
+IMPORTANT: DO NOT RECREATE THE APPLICATION FROM SCRATCH.
+
+First inspect the existing codebase, framework, routes, components, Firebase configuration, Firestore collections, authentication, existing features and design system.
+
+Preserve all existing working features and existing customer data. Improve and extend the existing implementation. Do not unnecessarily change the existing application structure or remove functional modules.
+
+If an existing feature already works, integrate it into the new architecture instead of creating a duplicate.
+
+---
+
+1. APPLICATION BRANDING AND DESIGN
+
+Product name: IT Asset Vault
+
+Product category: IT Asset Management and IT Service Management SaaS.
+
+Design a modern, professional, premium enterprise software interface.
+
+Use:
+
+- Deep navy: #101828
+- Primary blue: #2563EB
+- Electric blue accents: #3B82F6
+- Light background: #F8FAFC
+- White cards and surfaces
+- Slate text: #334155
+- Success green: #16A34A
+- Warning amber: #F59E0B
+- Error red: #DC2626
+
+Design requirements:
+
+- Modern enterprise SaaS dashboard.
+- Clean sidebar navigation.
+- Professional typography.
+- Consistent spacing and component sizes.
+- Modern data tables with search, filtering, sorting and pagination.
+- Attractive charts and analytics.
+- Responsive desktop, tablet and mobile interfaces.
+- Functional dropdowns, dialogs, confirmation modals and forms.
+- Skeleton loading states, empty states and error states.
+- Consistent status badges.
+- Accessible forms and keyboard navigation.
+
+Avoid excessive gradients, unnecessary animations, oversized cards and crowded dashboards.
+
+The interface must look like a professional enterprise product that businesses can confidently purchase.
+
+---
+
+2. MULTI-TENANT SAAS ARCHITECTURE
+
+Implement a secure multi-tenant architecture.
+
+A tenant represents a paying customer account.
+
+Support two tenant types:
+
+A. COMPANY TENANT
+
+- One company or organisation.
+- Its own employees, users, IT department, departments and locations.
+- Its own asset register.
+- Its own tickets, service requests, maintenance and reports.
+
+B. MSP TENANT
+
+- An IT service provider or managed service provider.
+- Can register and manage multiple client organisations.
+- Each client organisation has its own users, locations, departments, assets, tickets, contracts and service records.
+- MSP administrators can manage all authorised clients.
+- MSP technicians can only access client organisations they have been authorised to support.
+- Support client-specific permissions, contracts and SLA policies.
+
+Use a tenantId and orgId data model.
+
+tenantId identifies the paying customer account.
+
+orgId identifies the organisation whose records are being managed.
+
+For a direct company, orgId represents the company.
+
+For an MSP, orgId represents one of the MSP's registered client organisations.
+
+All business records must be scoped to the correct tenantId and orgId.
+
+A user may have memberships in multiple tenants. Provide an organisation and tenant switching interface where appropriate.
+
+Do not trust tenantId or orgId supplied by the frontend as proof of access.
+
+Resolve the authenticated user's identity on the backend, load their active membership, verify tenant membership and organisation-level permissions, and authorise every operation.
+
+Implement strict data isolation. No customer must be able to access another customer's assets, tickets, employees, reports, documents or records.
+
+---
+
+3. SUBSCRIPTION PLANS AND ENTITLEMENTS
+
+Create a configurable subscription and entitlement engine.
+
+Default plans:
+
+STARTER
+
+- GH₵149 monthly.
+- GH₵1,490 annually.
+- Maximum 100 assets.
+- Maximum 3 internal users.
+- Maximum 1 location.
+- Maximum 1 managed organisation.
+- Asset register and QR/barcode tracking.
+- Asset assignment and transfers.
+- Basic maintenance.
+- Basic helpdesk.
+- Basic reports.
+- Basic audit logs.
+
+PROFESSIONAL
+
+- GH₵349 monthly.
+- GH₵3,490 annually.
+- Maximum 500 assets.
+- Maximum 10 internal users.
+- Maximum 3 locations.
+- Maximum 5 managed client organisations.
+- Advanced asset management.
+- Advanced helpdesk.
+- Maintenance management.
+- Software licence management.
+- Basic SLA management.
+- Procurement and vendor features.
+- Approval workflows.
+- Advanced reports.
+- Knowledge base.
+- MSP client management.
+
+BUSINESS
+
+- GH₵699 monthly.
+- GH₵6,990 annually.
+- Maximum 2,000 assets.
+- Maximum 30 internal users.
+- Maximum 10 locations.
+- Maximum 20 managed client organisations.
+- All Professional features.
+- Advanced SLA management.
+- Incident, problem and change management.
+- Advanced procurement.
+- Advanced analytics.
+- Advanced audit logs.
+- Selected integrations.
+- Advanced MSP capabilities.
+
+ENTERPRISE
+
+- Starting from GH₵1,499 monthly.
+- Custom annual pricing.
+- Custom asset, user, location and client limits.
+- All modules.
+- Dedicated deployment option.
+- Custom integrations.
+- Custom branding.
+- Advanced security options.
+- Priority support.
+- Custom retention and backup policies.
+
+These are initial default commercial settings. Make every price, feature and limit editable by the Super Admin.
+
+Do not hardcode plan restrictions in UI components.
+
+Implement a central entitlement service that checks:
+
+- Whether the feature is included in the subscription.
+- Whether the tenant is active.
+- Whether the subscription is valid.
+- Whether the usage limit has been reached.
+- Whether an Enterprise override exists.
+
+The backend must enforce entitlements. Hiding a button in the frontend is not sufficient.
+
+Create upgrade prompts when a user attempts to use a feature that is not included in their plan.
+
+Allow subscription upgrades without losing existing records.
+
+Implement subscription statuses:
+
+- Trial
+- Active
+- Past due
+- Suspended
+- Cancelled
+- Expired
+
+Provide configurable grace periods and overdue payment policies. Never delete customer data automatically because a subscription expires.
+
+---
+
+4. USER MANAGEMENT AND RBAC
+
+Implement role-based access control with permissions enforced by the backend.
+
+Platform roles:
+
+- Super Admin
+- Platform Support Admin
+
+Tenant roles:
+
+- Tenant Owner
+- Tenant Admin
+- IT Manager
+- IT Technician
+- Asset Manager
+- Department Manager
+- Employee / Requester
+- Auditor / Viewer
+
+MSP roles:
+
+- MSP Admin
+- MSP Manager
+- MSP Technician
+- MSP Viewer
+
+Implement:
+
+- User invitation.
+- Email verification.
+- User activation and deactivation.
+- Password reset.
+- Organisation membership.
+- Role assignment.
+- Permission assignment.
+- Organisation-level access restrictions.
+- Technician assignment to selected client organisations.
+- Last login and account status.
+- Optional MFA support.
+
+Do not rely only on role names. Use explicit permission checks such as assets.read, assets.create, assets.update, tickets.assign, tickets.resolve, subscriptions.manage and reports.export.
+
+The Super Admin role must only be assignable through protected platform administration workflows.
+
+---
+
+5. IT ASSET MANAGEMENT MODULE
+
+Build a complete asset lifecycle management system.
+
+Asset registration fields:
+
+- Asset ID.
+- Asset tag.
+- Asset name.
+- Asset category.
+- Asset type.
+- Manufacturer.
+- Model.
+- Serial number.
+- Description.
+- Purchase date.
+- Purchase cost.
+- Supplier.
+- Invoice/reference number.
+- Warranty start date.
+- Warranty expiry date.
+- Location.
+- Department.
+- Assigned employee.
+- Condition.
+- Status.
+- Operating system.
+- IP address, where applicable.
+- MAC address, where applicable.
+- Hostname, where applicable.
+- Processor, RAM and storage, where applicable.
+- Notes.
+- Asset image.
+- Supporting documents.
+
+Asset categories should include:
+
+- Desktop computers.
+- Laptops.
+- Servers.
+- Printers.
+- Monitors.
+- Network equipment.
+- Routers.
+- Switches.
+- Firewalls.
+- Access points.
+- CCTV equipment.
+- Mobile devices.
+- UPS devices.
+- Storage devices.
+- Software.
+- Other configurable categories.
+
+Asset statuses:
+
+- Available.
+- Assigned.
+- In repair.
+- Under maintenance.
+- Reserved.
+- Lost.
+- Stolen.
+- Retired.
+- Disposed.
+
+Implement:
+
+- QR code generation.
+- Barcode generation.
+- Printable asset labels.
+- QR/barcode scanning using mobile camera where supported.
+- Asset search.
+- Bulk import using CSV or Excel.
+- Bulk export.
+- Asset assignment.
+- Asset return.
+- Asset transfer.
+- Asset history.
+- Warranty alerts.
+- Depreciation tracking.
+- Asset disposal approval.
+- Asset retirement.
+- Asset ownership and custody history.
+
+Every important asset action must create an audit record.
+
+Provide an asset detail page with tabs:
+
+- Overview.
+- Specifications.
+- Assignment history.
+- Maintenance history.
+- Tickets.
+- Warranty.
+- Documents.
+- Audit history.
+
+---
+
+6. IT HELPDESK MODULE
+
+Implement a complete internal IT helpdesk.
+
+Users should be able to submit support requests through a self-service portal.
+
+Ticket fields:
+
+- Ticket number.
+- Subject.
+- Description.
+- Requester.
+- Client organisation.
+- Department.
+- Location.
+- Category.
+- Subcategory.
+- Priority.
+- Status.
+- Assigned technician.
+- Related asset.
+- Attachments.
+- Created date.
+- First response date.
+- Resolution date.
+- SLA deadline.
+
+Ticket priorities:
+
+- Critical.
+- High.
+- Medium.
+- Low.
+
+Ticket statuses:
+
+- New.
+- Open.
+- Assigned.
+- In Progress.
+- Pending User.
+- Pending Vendor.
+- Resolved.
+- Closed.
+- Reopened.
+
+Implement:
+
+- Ticket creation.
+- Ticket assignment.
+- Technician queues.
+- Ticket comments.
+- Internal technician notes.
+- User-visible replies.
+- File attachments.
+- Related asset linking.
+- Ticket escalation.
+- Ticket reassignment.
+- Ticket history.
+- Ticket search and filters.
+- Bulk assignment where appropriate.
+- Ticket closure and reopening.
+- Customer satisfaction feedback.
+- Email notifications.
+
+Create dashboards for:
+
+- All tickets.
+- My tickets.
+- Unassigned tickets.
+- Critical tickets.
+- Overdue tickets.
+- Pending tickets.
+- Resolved tickets.
+
+For MSP accounts, technicians must be able to filter tickets by client organisation and only see organisations they are authorised to support.
+
+---
+
+7. IT SERVICE MANAGEMENT MODULE
+
+Implement proper ITSM capabilities.
+
+A. INCIDENT MANAGEMENT
+
+- Record incidents.
+- Categorise incidents.
+- Set impact and urgency.
+- Calculate priority.
+- Assign technicians.
+- Track resolution.
+- Record incident timelines.
+
+B. SERVICE REQUEST MANAGEMENT
+
+- Create service request forms.
+- Allow users to request equipment, software and IT services.
+- Support approval workflows.
+- Track fulfilment.
+- Link fulfilled requests to assets.
+
+C. PROBLEM MANAGEMENT
+
+- Record recurring incidents.
+- Identify root causes.
+- Link related incidents.
+- Record workarounds.
+- Document permanent fixes.
+
+D. CHANGE MANAGEMENT
+
+- Submit change requests.
+- Record change descriptions.
+- Capture risk and impact.
+- Define implementation plans.
+- Define rollback plans.
+- Support approvals.
+- Record scheduled implementation dates.
+- Record change outcomes.
+
+E. SERVICE CATALOGUE
+Create configurable service items such as:
+
+- New laptop request.
+- New user account.
+- Software installation.
+- Email account creation.
+- Password reset.
+- Network access.
+- Printer support.
+- Server access.
+- New employee IT setup.
+- Employee offboarding.
+
+Allow tenant administrators to create their own catalogue items.
+
+---
+
+8. SLA AND ESCALATION MANAGEMENT
+
+Create a configurable SLA engine.
+
+Support:
+
+- First response targets.
+- Resolution targets.
+- Priority-based SLAs.
+- Client-specific SLA policies.
+- Business operating hours.
+- Holidays.
+- SLA pause conditions.
+- Escalation levels.
+- Technician notifications.
+- Manager notifications.
+- Breach reporting.
+
+Display SLA timers on ticket detail pages and ticket lists.
+
+Calculate response and resolution performance correctly using configured business hours.
+
+For MSPs, allow each client organisation to have its own service contract and SLA policy.
+
+Use scheduled background jobs or Cloud Tasks for reminders and escalation. Do not depend on the user keeping the browser open.
+
+---
+
+9. MAINTENANCE MANAGEMENT
+
+Implement:
+
+- Preventive maintenance schedules.
+- Corrective maintenance.
+- Repair records.
+- Technician assignment.
+- Maintenance costs.
+- Parts used.
+- Vendor service records.
+- Maintenance notes.
+- Maintenance attachments.
+- Next maintenance date.
+- Maintenance reminders.
+- Asset downtime history.
+
+Allow maintenance records to link to an asset and related helpdesk ticket.
+
+---
+
+10. SOFTWARE AND LICENCE MANAGEMENT
+
+Implement:
+
+- Software inventory.
+- Software name and publisher.
+- Licence type.
+- Licence key or reference, stored securely where applicable.
+- Licence purchase date.
+- Expiry date.
+- Number of seats purchased.
+- Number of seats allocated.
+- Available seats.
+- Assigned devices or employees.
+- Renewal cost.
+- Vendor.
+- Compliance status.
+- Expiry notifications.
+
+Do not expose sensitive licence information to users without permission.
+
+---
+
+11. PROCUREMENT AND VENDOR MANAGEMENT
+
+Implement:
+
+- Vendor register.
+- Supplier contact information.
+- Purchase requests.
+- Approval workflows.
+- Quotations.
+- Purchase orders.
+- Goods received.
+- Purchase invoices.
+- Purchase history.
+- Asset creation from approved purchases.
+- Vendor performance records.
+
+Use permission-based approvals and record the approver, decision, timestamp and comments.
+
+---
+
+12. KNOWLEDGE BASE
+
+Create a searchable knowledge base for IT documentation.
+
+Support:
+
+- Articles.
+- Categories.
+- Tags.
+- Draft and published status.
+- Article authors.
+- Attachments.
+- Search.
+- Internal-only and user-visible articles.
+- Helpful/not helpful feedback.
+
+Allow technicians to link knowledge articles to tickets.
+
+---
+
+13. MSP CLIENT MANAGEMENT
+
+This is a major differentiating feature.
+
+Create an MSP dashboard where a service provider can:
+
+- Register client organisations.
+- Edit client details.
+- Activate and deactivate clients.
+- Assign technicians to clients.
+- Set client-specific SLA policies.
+- Record service contracts.
+- View client asset registers.
+- View client tickets.
+- Manage maintenance.
+- Generate individual client reports.
+- Generate consolidated MSP reports.
+- Filter data by client.
+- Track managed assets and client usage.
+
+Each client must have independent organisation records and permissions.
+
+An MSP user must not access a client unless the user's membership and permissions explicitly allow it.
+
+---
+
+14. SUPER ADMIN PLATFORM DASHBOARD
+
+Create a separate platform administration area.
+
+Super Admin features:
+
+A. OVERVIEW
+
+- Total registered tenants.
+- Active tenants.
+- Suspended tenants.
+- Trial accounts.
+- Total active subscriptions.
+- Monthly recurring revenue.
+- Annual recurring revenue.
+- Payment failures.
+- Total registered users.
+- Total managed assets.
+- Total tickets.
+
+B. TENANT MANAGEMENT
+
+- View all tenants.
+- Create tenant accounts.
+- Edit tenant details.
+- View tenant type.
+- View tenant subscription.
+- View tenant usage.
+- Suspend or reactivate tenants.
+- Manage Enterprise account metadata.
+
+C. SUBSCRIPTION MANAGEMENT
+
+- Create and edit plans.
+- Edit monthly and annual prices.
+- Change feature entitlements.
+- Change asset, user, location and client limits.
+- Assign custom plan overrides.
+- View subscription history.
+
+D. PAYMENT MANAGEMENT
+
+- View transactions.
+- View successful and failed payments.
+- View invoices.
+- View payment references.
+- Record manual payments with proper audit logs.
+- Manage refunds through authorised workflows.
+
+E. ENTERPRISE MANAGEMENT
+
+- Record dedicated deployment status.
+- Record Google Cloud project reference.
+- Record Firebase project reference.
+- Record region.
+- Record custom domain.
+- Record provisioning status.
+- Record deployment and renewal information.
+
+F. PLATFORM SETTINGS
+
+- Branding.
+- Email settings.
+- Payment gateway settings.
+- Notification templates.
+- Subscription grace periods.
+- Support contact details.
+- Terms and privacy links.
+
+G. PLATFORM AUDIT LOGS
+Track sensitive Super Admin activities.
+
+Do not expose customer data unnecessarily to the platform administration interface.
+
+---
+
+15. SUBSCRIPTION PAYMENTS
+
+Prepare a payment integration architecture for Paystack.
+
+Support:
+
+- Monthly subscriptions.
+- Annual subscriptions.
+- Subscription upgrades.
+- Subscription renewals.
+- Payment verification.
+- Payment references.
+- Payment history.
+- Invoices and receipts.
+- Failed payment handling.
+- Subscription expiry notifications.
+
+All payment verification must happen on the backend.
+
+Never trust a successful payment response from the browser.
+
+Verify transactions using the payment provider's server API and validate webhook signatures.
+
+Implement webhook idempotency to prevent duplicate payment processing.
+
+Store secret keys only in secure server-side environment variables or Secret Manager.
+
+The system must remain functional in a configurable test mode until live credentials are supplied.
+
+---
+
+16. FIRESTORE DATABASE STRUCTURE
+
+Use Cloud Firestore.
+
+Create a scalable structure similar to:
+
+platform/
+plans/
+subscriptions/
+payments/
+invoices/
+tenantRegistry/
+usage/
+provisioningJobs/
+platformSettings/
+platformAuditLogs/
+
+users/
+{uid}/
+profile
+preferences
+
+userMemberships/
+{uid}_{tenantId}/
+
+tenants/
+{tenantId}/
+profile
+settings
+branding
+subscriptionSnapshot
+
+locations/
+departments/
+clientOrganisations/
+members/
+
+assets/
+assetCategories/
+assetAssignments/
+assetTransfers/
+assetMaintenance/
+
+softwareLicences/
+vendors/
+purchaseRequests/
+purchaseOrders/
+
+tickets/
+incidents/
+problems/
+changes/
+serviceRequests/
+serviceCatalogue/
+approvals/
+
+slaPolicies/
+contracts/
+knowledgeArticles/
+auditLogs/
+notifications/
+integrations/
+customFields/
+
+Use ticket subcollections for comments and attachments where appropriate.
+
+Every business record must include the appropriate tenantId and orgId.
+
+Use createdAt, updatedAt, createdBy and updatedBy consistently.
+
+Use server timestamps for authoritative timestamps.
+
+Use appropriate composite indexes.
+
+Avoid unbounded arrays and oversized Firestore documents.
+
+Use Cloud Storage for files, images, documents and ticket attachments.
+
+Use a tenant-aware storage path structure, for example:
+
+tenants/{tenantId}/organisations/{orgId}/assets/{assetId}/
+
+tenants/{tenantId}/organisations/{orgId}/tickets/{ticketId}/
+
+tenants/{tenantId}/organisations/{orgId}/documents/
+
+Implement secure upload and download authorisation.
+
+---
+
+17. SECURITY AND PRODUCTION READINESS
+
+Security is a priority.
+
+Implement:
+
+- Firebase Authentication.
+- Secure backend authentication.
+- Firebase ID token verification.
+- Role-based authorisation.
+- Tenant-level isolation.
+- Organisation-level isolation.
+- Least-privilege service accounts.
+- Server-side subscription validation.
+- Server-side entitlement checks.
+- Secure file uploads.
+- File type and size validation.
+- Input validation.
+- Rate limiting on sensitive APIs.
+- Protection against insecure direct object references.
+- Secure password reset flows.
+- Audit logging.
+- Secure secrets management.
+- Error handling without exposing secrets.
+- Pagination and query limits.
+
+IMPORTANT FIRESTORE SECURITY RULES:
+
+If the application uses Cloud Run with the Firebase Admin SDK, remember that Admin SDK operations bypass Firestore Security Rules.
+
+Therefore, implement all authorisation checks inside the backend services.
+
+Do not assume that Firestore Security Rules alone protect backend API operations.
+
+If the frontend accesses Firestore directly, write restrictive Firestore Security Rules and test them.
+
+Never deploy permissive production rules such as allow read, write: if true.
+
+Use Firebase Emulator Suite or equivalent automated tests for security rules.
+
+Test that:
+
+- Tenant A cannot read Tenant B's records.
+- MSP Client A cannot read MSP Client B's records without permission.
+- An employee cannot modify assets without permission.
+- An unauthorised technician cannot access another client's tickets.
+- An expired subscription cannot use restricted paid features.
+- A browser user cannot bypass subscription limits by changing API parameters.
+- A normal administrator cannot access platform Super Admin functions.
+
+Create automated tenant-isolation tests.
+
+---
+
+18. CLOUD RUN AND GOOGLE CLOUD DEPLOYMENT
+
+Use:
+
+- Google Cloud Run for backend APIs and application services.
+- Firebase Authentication.
+- Cloud Firestore.
+- Cloud Storage.
+- Cloud Scheduler or Cloud Tasks for background jobs.
+- Google Cloud Secret Manager for secrets.
+- Cloud Logging and Cloud Monitoring.
+- Firebase Hosting or an appropriate supported frontend hosting option.
+
+Keep the application deployable through GitHub.
+
+Provide:
+
+- Environment-specific configuration.
+- Development environment.
+- Staging environment.
+- Production environment.
+- Secure environment variables.
+- Health check endpoint.
+- Logging.
+- Error monitoring.
+- Deployment documentation.
+
+Do not put Firebase Admin service account credentials in frontend code.
+
+Use Application Default Credentials and dedicated least-privilege service accounts for Cloud Run.
+
+For shared SaaS, use the central shared infrastructure with strict tenant isolation.
+
+For Enterprise, support deploying the same codebase to a dedicated Google Cloud project with its own Firebase and Firestore resources.
+
+Do not create separate source code for each subscription plan.
+
+---
+
+19. REPORTS AND ANALYTICS
+
+Create attractive, useful dashboards and downloadable reports.
+
+Asset reports:
+
+- Total assets.
+- Assets by category.
+- Assets by department.
+- Assets by location.
+- Assets by status.
+- Assigned versus available assets.
+- Asset purchase cost.
+- Asset depreciation.
+- Warranty expiry.
+- Retired and disposed assets.
+
+Helpdesk reports:
+
+- Total tickets.
+- Open tickets.
+- Closed tickets.
+- Overdue tickets.
+- Tickets by priority.
+- Tickets by category.
+- Tickets by technician.
+- Average response time.
+- Average resolution time.
+- SLA compliance.
+
+Maintenance reports:
+
+- Upcoming maintenance.
+- Completed maintenance.
+- Overdue maintenance.
+- Repair costs.
+- Asset downtime.
+
+MSP reports:
+
+- Assets by client.
+- Tickets by client.
+- SLA performance by client.
+- Technician workload.
+- Contract status.
+- Client usage.
+
+Support CSV and PDF exports with permission checks and organisation-specific filtering.
+
+---
+
+20. NOTIFICATIONS AND AUTOMATION
+
+Implement an in-app notification centre.
+
+Support notifications for:
+
+- New ticket.
+- Ticket assignment.
+- Ticket update.
+- Ticket escalation.
+- SLA approaching breach.
+- SLA breach.
+- Asset assignment.
+- Asset transfer.
+- Warranty expiry.
+- Maintenance due.
+- Licence expiry.
+- Approval request.
+- Approval decision.
+- Subscription renewal.
+- Failed payment.
+
+Prepare email integration for transactional messages.
+
+Use background jobs for scheduled reminders. Ensure jobs are idempotent and do not send duplicate notifications.
+
+---
+
+21. USER EXPERIENCE AND NAVIGATION
+
+Create separate navigation experiences for:
+
+A. PLATFORM SUPER ADMIN
+
+- Overview.
+- Tenants.
+- Subscriptions.
+- Payments.
+- Plans.
+- Usage.
+- Enterprise deployments.
+- Platform settings.
+- Audit logs.
+
+B. COMPANY TENANT
+
+- Dashboard.
+- Assets.
+- Asset Categories.
+- Assignments.
+- Maintenance.
+- Software Licences.
+- Helpdesk.
+- Incidents.
+- Service Requests.
+- Problems.
+- Changes.
+- Service Catalogue.
+- Knowledge Base.
+- Procurement.
+- Vendors.
+- Reports.
+- Users.
+- Departments.
+- Locations.
+- Settings.
+- Subscription.
+
+C. MSP TENANT
+
+- MSP Dashboard.
+- Client Organisations.
+- Client Assets.
+- Client Tickets.
+- Service Contracts.
+- SLA Management.
+- Technicians.
+- Maintenance.
+- Reports.
+- Knowledge Base.
+- Users.
+- Subscription.
+- Settings.
+
+Navigation must be permission-aware and plan-aware.
+
+Do not display modules that the user is not authorised to access.
+
+Provide an organisation selector for MSP users.
+
+---
+
+22. IMPLEMENTATION APPROACH
+
+Work in phases. Do not attempt a risky, unstructured rewrite.
+
+PHASE 1 — INSPECTION AND PRESERVATION
+
+- Inspect the current project.
+- Identify the existing frontend framework.
+- Identify current routes and components.
+- Inspect Firebase configuration.
+- Inspect Firestore collections.
+- Identify current authentication.
+- Identify working modules.
+- Identify incomplete modules.
+- Create an implementation plan.
+- Preserve existing functionality and records.
+
+PHASE 2 — CORE SAAS FOUNDATION
+
+- Implement tenant model.
+- Implement organisation model.
+- Implement MSP client model.
+- Implement user memberships.
+- Implement RBAC.
+- Implement tenant switching.
+- Implement backend tenant resolution.
+- Implement tenant isolation tests.
+
+PHASE 3 — SUBSCRIPTIONS AND SUPER ADMIN
+
+- Implement plans.
+- Implement feature entitlements.
+- Implement usage limits.
+- Implement subscription statuses.
+- Implement Super Admin dashboard.
+- Implement payment architecture.
+- Implement upgrade and downgrade workflows.
+
+PHASE 4 — ITAM AND ITSM
+
+- Complete asset management.
+- Complete helpdesk.
+- Implement service requests.
+- Implement incidents.
+- Implement problems.
+- Implement changes.
+- Implement SLA management.
+- Implement maintenance.
+- Implement software licensing.
+- Implement procurement.
+- Implement MSP client management.
+
+PHASE 5 — REPORTS AND AUTOMATION
+
+- Dashboards.
+- Exports.
+- Notifications.
+- Background jobs.
+- Warranty reminders.
+- SLA reminders.
+- Subscription reminders.
+
+PHASE 6 — SECURITY AND DEPLOYMENT
+
+- Security tests.
+- Tenant-isolation tests.
+- Firestore rules.
+- Storage rules.
+- Backend permission tests.
+- Environment configuration.
+- Cloud Run deployment preparation.
+- Production readiness review.
+
+After each phase, check the application for errors and confirm that existing functionality still works.
+
+Do not silently remove unfinished or existing features.
+
+---
+
+23. FINAL ACCEPTANCE CRITERIA
+
+The project is not complete until the following scenarios work:
+
+1. A new company can register, create its tenant and start a subscription.
+2. A company administrator can invite employees.
+3. Employees can access only their organisation's permitted data.
+4. A company can register assets and generate QR labels.
+5. Employees can submit helpdesk tickets.
+6. Technicians can receive and resolve assigned tickets.
+7. Managers can approve service requests.
+8. The system can calculate and track SLA performance.
+9. Assets can be assigned, transferred, maintained and retired.
+10. A new MSP can register and create several client organisations.
+11. MSP technicians can be assigned to selected clients.
+12. MSP reports can be filtered by individual client.
+13. MSP users cannot access unauthorised client data.
+14. The Super Admin can manage tenants and subscriptions.
+15. The Super Admin can configure plans and feature limits.
+16. Subscription limits are enforced by the backend.
+17. Payment verification is performed securely.
+18. Enterprise deployment information can be managed separately.
+19. Reports and exports respect tenant and organisation permissions.
+20. Tenant-isolation and role-authorisation tests pass.
+
+FINAL INSTRUCTION
+
+Build this as a real commercial SaaS application, not a static UI demonstration.
+
+All buttons, forms, tables, filters, charts, menus, workflows and actions must work.
+
+Use the existing codebase and preserve working features.
+
+Use Firebase and Google Cloud services correctly.
+
+Prioritise security, maintainability, scalability, data integrity and a polished enterprise user experience.
+
+Where a third-party integration requires credentials, build the integration interface and backend structure, document the required configuration and use test mode until credentials are supplied.
+
+Do not fabricate successful payments, emails, integrations or deployment results.
+
+Before finishing, provide:
+
+- Summary of implemented features.
+- Updated Firestore structure.
+- Security and access-control explanation.
+- Required Firebase configuration.
+- Required Google Cloud configuration.
+- Required environment variables.
+- Deployment instructions.
+- Known limitations.
+- Tests performed and their results.

@@ -1,0 +1,630 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1 / Global Safety Net: Deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 3: Global Hardened Primitives
+    // -------------------------------------------------------------------------
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidShortText(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isBootstrappedSuperAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'georgearthur848@gmail.com';
+    }
+
+    function isSuperAdmin() {
+      return isBootstrappedSuperAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/platformAdmins/$(request.auth.uid))
+      );
+    }
+
+    function membershipDoc(tenantId) {
+      return get(/databases/$(database)/documents/userMemberships/$(request.auth.uid + '_' + tenantId));
+    }
+
+    function hasActiveMembership(tenantId) {
+      return isVerifiedUser() &&
+        isValidId(tenantId) &&
+        exists(/databases/$(database)/documents/userMemberships/$(request.auth.uid + '_' + tenantId)) &&
+        membershipDoc(tenantId).data.uid == request.auth.uid &&
+        membershipDoc(tenantId).data.tenantId == tenantId &&
+        membershipDoc(tenantId).data.status == 'active';
+    }
+
+    function isTenantAdmin(tenantId) {
+      return hasActiveMembership(tenantId) &&
+        membershipDoc(tenantId).data.role in ['tenant_owner', 'tenant_admin', 'msp_admin', 'it_manager', 'msp_manager'];
+    }
+
+    function canAccessTenantOrg(tenantId, orgId) {
+      return hasActiveMembership(tenantId) &&
+        isValidId(orgId) &&
+        (
+          membershipDoc(tenantId).data.orgAccessMode == 'all' ||
+          (
+            membershipDoc(tenantId).data.allowedOrgIds is list &&
+            membershipDoc(tenantId).data.allowedOrgIds.size() <= 50 &&
+            membershipDoc(tenantId).data.allowedOrgIds.hasAny([orgId])
+          )
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validation Blueprints (Pillar 2: Strict keys, types, sizes, identity)
+    // -------------------------------------------------------------------------
+    function isValidPlatformPlan(data) {
+      return data.keys().hasAll(['id', 'code', 'name', 'monthlyPriceGhs', 'annualPriceGhs', 'createdBy', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'code', 'name', 'description', 'monthlyPriceGhs', 'annualPriceGhs', 'isPublic', 'limits', 'features', 'createdBy', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        data.code in ['starter', 'professional', 'business', 'enterprise'] &&
+        isValidShortText(data.name, 2, 80) &&
+        data.monthlyPriceGhs is number && data.monthlyPriceGhs >= 0 &&
+        data.annualPriceGhs is number && data.annualPriceGhs >= 0 &&
+        data.createdBy == request.auth.uid &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTenantProfile(data) {
+      return data.keys().hasAll(['id', 'name', 'type', 'status', 'ownerUid', 'planCode', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'name', 'slug', 'type', 'status', 'ownerUid', 'planCode', 'deploymentMode', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidShortText(data.name, 2, 160) &&
+        data.type in ['company', 'msp'] &&
+        data.status in ['active', 'suspended', 'trial'] &&
+        isValidId(data.ownerUid) &&
+        data.planCode in ['starter', 'professional', 'business', 'enterprise'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserPublic(data, uid) {
+      return data.keys().hasAll(['uid', 'displayName', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'department', 'createdAt', 'updatedAt']) &&
+        data.uid == uid &&
+        isValidShortText(data.displayName, 1, 120) &&
+        (!('department' in data) || isValidShortText(data.department, 1, 120)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivate(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'phone', 'mfaEnabled', 'updatedAt']) &&
+        data.uid == uid &&
+        isValidShortText(data.email, 3, 180) &&
+        (!('phone' in data) || isValidShortText(data.phone, 0, 40)) &&
+        (!('mfaEnabled' in data) || data.mfaEnabled is bool) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMembership(data) {
+      return data.keys().hasAll(['id', 'uid', 'tenantId', 'role', 'status', 'orgAccessMode', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'uid', 'tenantId', 'role', 'status', 'orgAccessMode', 'allowedOrgIds', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.uid) &&
+        isValidId(data.tenantId) &&
+        data.role in ['tenant_owner', 'tenant_admin', 'it_manager', 'it_technician', 'asset_manager', 'dept_manager', 'employee', 'auditor', 'msp_admin', 'msp_manager', 'msp_technician', 'msp_viewer'] &&
+        data.status in ['active', 'invited', 'suspended'] &&
+        data.orgAccessMode in ['all', 'selected'] &&
+        (!('allowedOrgIds' in data) || (data.allowedOrgIds is list && data.allowedOrgIds.size() <= 50)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTenantScopedRecord(data) {
+      return data.keys().hasAll(['id', 'tenantId', 'orgId', 'status', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'orgId', 'title', 'category', 'priority', 'status', 'payload', 'tags', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.tenantId) &&
+        isValidId(data.orgId) &&
+        isValidShortText(data.status, 1, 64) &&
+        (!('title' in data) || isValidShortText(data.title, 1, 240)) &&
+        (!('category' in data) || isValidShortText(data.category, 1, 80)) &&
+        (!('priority' in data) || isValidShortText(data.priority, 1, 32)) &&
+        (!('tags' in data) || (data.tags is list && data.tags.size() <= 10 && (data.tags.size() == 0 || data.tags[0] is string))) &&
+        isValidId(data.createdBy) &&
+        isValidId(data.updatedBy) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTicketComment(data, ticketId) {
+      return data.keys().hasAll(['id', 'tenantId', 'orgId', 'ticketId', 'isInternal', 'body', 'createdBy', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'orgId', 'ticketId', 'isInternal', 'body', 'createdBy', 'createdAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.tenantId) &&
+        isValidId(data.orgId) &&
+        data.ticketId == ticketId &&
+        data.isInternal is bool &&
+        isValidShortText(data.body, 1, 4000) &&
+        data.createdBy == request.auth.uid &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidSubscriptionTx(data) {
+      return data.keys().hasAll(['id', 'tenantId', 'status', 'createdBy', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'tenantId', 'planCode', 'billingCycle', 'status', 'amountGhs', 'reference', 'createdBy', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.tenantId) &&
+        isValidShortText(data.status, 2, 48) &&
+        (!('amountGhs' in data) || (data.amountGhs is number && data.amountGhs >= 0)) &&
+        (!('reference' in data) || isValidShortText(data.reference, 1, 128)) &&
+        isValidId(data.createdBy) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Connection Health Check Document
+    // -------------------------------------------------------------------------
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // -------------------------------------------------------------------------
+    // Platform Administration Collections (Super Admin Only for Writes)
+    // -------------------------------------------------------------------------
+    match /plans/{planId} {
+      allow get: if isSignedIn() && isValidId(planId);
+      allow list: if isSignedIn() && (existing().isPublic == true || isBootstrappedSuperAdmin());
+      allow create: if isSuperAdmin() && isValidId(planId) && isValidPlatformPlan(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isSuperAdmin() && isValidId(planId) && isValidPlatformPlan(incoming()) && incoming().createdBy == existing().createdBy && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'monthlyPriceGhs', 'annualPriceGhs', 'isPublic', 'limits', 'features', 'updatedAt']);
+      allow delete: if isSuperAdmin() && isValidId(planId);
+    }
+
+    match /platformAdmins/{uid} {
+      allow get: if isVerifiedUser() && isValidId(uid) && (request.auth.uid == uid || isBootstrappedSuperAdmin());
+      allow create, update, delete: if isBootstrappedSuperAdmin() && isValidId(uid);
+    }
+
+    match /platform/{docId} {
+      allow get, create, update, delete: if isSuperAdmin() && isValidId(docId);
+    }
+
+    match /platformSettings/{settingId} {
+      allow get, create, update, delete: if isSuperAdmin() && isValidId(settingId);
+    }
+
+    match /provisioningJobs/{jobId} {
+      allow get, create, update, delete: if isSuperAdmin() && isValidId(jobId);
+      allow list: if isBootstrappedSuperAdmin();
+    }
+
+    match /platformAuditLogs/{logId} {
+      allow get: if isSuperAdmin() && isValidId(logId);
+      allow list: if isBootstrappedSuperAdmin();
+      allow create: if isSuperAdmin() && isValidId(logId) && isValidTenantScopedRecord(incoming()) && incoming().createdBy == request.auth.uid && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /tenantRegistry/{tenantId} {
+      allow get: if isValidId(tenantId) && (isSuperAdmin() || hasActiveMembership(tenantId));
+      allow list: if isVerifiedUser() && (isBootstrappedSuperAdmin() || existing().ownerUid == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(tenantId) && isValidTenantProfile(incoming()) && incoming().ownerUid == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if (isSuperAdmin() || isTenantAdmin(tenantId)) && isValidId(tenantId) && isValidTenantProfile(incoming()) && incoming().id == existing().id && incoming().ownerUid == existing().ownerUid && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'slug', 'status', 'planCode', 'deploymentMode', 'updatedAt']);
+      allow delete: if isSuperAdmin() && isValidId(tenantId);
+    }
+
+    match /tenants/{tenantId} {
+      allow get: if isValidId(tenantId) && (isSuperAdmin() || hasActiveMembership(tenantId));
+      allow list: if isVerifiedUser() && (isBootstrappedSuperAdmin() || existing().ownerUid == request.auth.uid);
+      allow create: if isVerifiedUser() && isValidId(tenantId) && isValidTenantProfile(incoming()) && incoming().ownerUid == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if (isSuperAdmin() || isTenantAdmin(tenantId)) && isValidId(tenantId) && isValidTenantProfile(incoming()) && incoming().id == existing().id && incoming().ownerUid == existing().ownerUid && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'slug', 'status', 'planCode', 'deploymentMode', 'updatedAt']);
+      allow delete: if isSuperAdmin() && isValidId(tenantId);
+
+      match /config/{docId} {
+        allow get: if isValidId(tenantId) && isValidId(docId) && (isSuperAdmin() || hasActiveMembership(tenantId));
+        allow create, update: if isValidId(tenantId) && isValidId(docId) && (isSuperAdmin() || isTenantAdmin(tenantId));
+      }
+    }
+
+    match /subscriptions/{subscriptionId} {
+      allow get: if isValidId(subscriptionId) && (isSuperAdmin() || hasActiveMembership(existing().tenantId));
+      allow list: if isVerifiedUser() && (isBootstrappedSuperAdmin() || existing().createdBy == request.auth.uid);
+      allow create: if isSuperAdmin() && isValidId(subscriptionId) && isValidSubscriptionTx(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isSuperAdmin() && isValidId(subscriptionId) && isValidSubscriptionTx(incoming()) && incoming().tenantId == existing().tenantId && incoming().createdBy == existing().createdBy && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['planCode', 'billingCycle', 'status', 'amountGhs', 'reference', 'updatedAt']);
+      allow delete: if isSuperAdmin() && isValidId(subscriptionId);
+    }
+
+    match /payments/{paymentId} {
+      allow get: if isValidId(paymentId) && (isSuperAdmin() || hasActiveMembership(existing().tenantId));
+      allow list: if isVerifiedUser() && (isBootstrappedSuperAdmin() || existing().createdBy == request.auth.uid);
+      allow create: if isSuperAdmin() && isValidId(paymentId) && isValidSubscriptionTx(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isSuperAdmin() && isValidId(paymentId) && isValidSubscriptionTx(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /invoices/{invoiceId} {
+      allow get: if isValidId(invoiceId) && (isSuperAdmin() || hasActiveMembership(existing().tenantId));
+      allow list: if isVerifiedUser() && (isBootstrappedSuperAdmin() || existing().createdBy == request.auth.uid);
+      allow create, update: if isSuperAdmin() && isValidId(invoiceId) && isValidSubscriptionTx(incoming());
+      allow delete: if false;
+    }
+
+    match /usage/{tenantId} {
+      allow get: if isValidId(tenantId) && (isSuperAdmin() || hasActiveMembership(tenantId));
+      allow create, update: if isSuperAdmin() && isValidId(tenantId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Users & PII Isolation (Pillar 6: Split Collection)
+    // -------------------------------------------------------------------------
+    match /users/{uid} {
+      allow get: if isVerifiedUser() && isValidId(uid) && (request.auth.uid == uid || isSuperAdmin());
+      allow create: if isVerifiedUser() && isValidId(uid) && request.auth.uid == uid && isValidUserPublic(incoming(), uid) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() && isValidId(uid) && (request.auth.uid == uid || isSuperAdmin()) && isValidUserPublic(incoming(), uid) && incoming().uid == existing().uid && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'department', 'updatedAt']);
+      allow delete: if isSuperAdmin() && isValidId(uid);
+
+      match /private/{docId} {
+        allow get: if isVerifiedUser() && isValidId(uid) && isValidId(docId) && (request.auth.uid == uid || isSuperAdmin());
+        allow create, update: if isVerifiedUser() && isValidId(uid) && isValidId(docId) && request.auth.uid == uid && isValidUserPrivate(incoming(), uid) && incoming().updatedAt == request.time;
+        allow delete: if isSuperAdmin() && isValidId(uid) && isValidId(docId);
+      }
+
+      match /preferences/{docId} {
+        allow get: if isVerifiedUser() && isValidId(uid) && isValidId(docId) && request.auth.uid == uid;
+        allow create, update: if isVerifiedUser() && isValidId(uid) && isValidId(docId) && request.auth.uid == uid && incoming().uid == uid && incoming().updatedAt == request.time;
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Authoritative User Memberships (Pillar 1: Master Gate Source of Truth)
+    // -------------------------------------------------------------------------
+    match /userMemberships/{membershipId} {
+      allow get: if isVerifiedUser() && isValidId(membershipId) && (
+        existing().uid == request.auth.uid ||
+        isSuperAdmin() ||
+        isTenantAdmin(existing().tenantId)
+      );
+      allow list: if isVerifiedUser() && (
+        existing().uid == request.auth.uid ||
+        isBootstrappedSuperAdmin()
+      );
+      // Users can bootstrap their own initial tenant_owner membership ONLY when creating a new tenant they own
+      allow create: if isVerifiedUser() &&
+        isValidId(membershipId) &&
+        membershipId == (incoming().uid + '_' + incoming().tenantId) &&
+        isValidMembership(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time && (
+          isSuperAdmin() ||
+          isTenantAdmin(incoming().tenantId) ||
+          (
+            incoming().uid == request.auth.uid &&
+            incoming().role == 'tenant_owner' &&
+            incoming().status == 'active' &&
+            exists(/databases/$(database)/documents/tenants/$(incoming().tenantId)) &&
+            get(/databases/$(database)/documents/tenants/$(incoming().tenantId)).data.ownerUid == request.auth.uid
+          )
+        );
+      allow update: if isVerifiedUser() &&
+        isValidId(membershipId) &&
+        isValidMembership(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().uid == existing().uid &&
+        incoming().tenantId == existing().tenantId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (isSuperAdmin() || isTenantAdmin(existing().tenantId)) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['role', 'status', 'orgAccessMode', 'allowedOrgIds', 'updatedAt']);
+      allow delete: if isSuperAdmin() || (isVerifiedUser() && isValidId(membershipId) && isTenantAdmin(existing().tenantId) && existing().uid != request.auth.uid);
+    }
+
+    // -------------------------------------------------------------------------
+    // Tenant + Organisation Scoped Operational Collections
+    // -------------------------------------------------------------------------
+    function allowTenantScopedGet(docId) {
+      return isValidId(docId) && (
+        isSuperAdmin() ||
+        canAccessTenantOrg(existing().tenantId, existing().orgId)
+      );
+    }
+
+    function allowTenantScopedList() {
+      return isVerifiedUser() && (
+        isBootstrappedSuperAdmin() ||
+        existing().createdBy == request.auth.uid
+      );
+    }
+
+    function allowTenantScopedCreate(docId) {
+      return isVerifiedUser() &&
+        isValidId(docId) &&
+        isValidTenantScopedRecord(incoming()) &&
+        incoming().createdBy == request.auth.uid &&
+        incoming().updatedBy == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        canAccessTenantOrg(incoming().tenantId, incoming().orgId) &&
+        exists(/databases/$(database)/documents/tenants/$(incoming().tenantId));
+    }
+
+    function allowTenantScopedUpdate(docId) {
+      return isVerifiedUser() &&
+        isValidId(docId) &&
+        isValidTenantScopedRecord(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().tenantId == existing().tenantId &&
+        incoming().orgId == existing().orgId &&
+        incoming().createdBy == existing().createdBy &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedBy == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        (
+          isSuperAdmin() ||
+          (
+            canAccessTenantOrg(existing().tenantId, existing().orgId) &&
+            !(existing().status in ['Closed', 'Disposed'])
+          )
+        ) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'priority', 'status', 'payload', 'tags', 'updatedBy', 'updatedAt']);
+    }
+
+    function allowTenantScopedDelete(docId) {
+      return isVerifiedUser() &&
+        isValidId(docId) &&
+        (isSuperAdmin() || isTenantAdmin(existing().tenantId));
+    }
+
+    match /locations/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /departments/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /clientOrganisations/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /members/{docId} {
+      allow get: if isValidId(docId) && (isSuperAdmin() || hasActiveMembership(existing().tenantId));
+      allow list: if isVerifiedUser() && (isBootstrappedSuperAdmin() || existing().uid == request.auth.uid);
+      allow create: if isValidId(docId) && isValidMembership(incoming()) && (isSuperAdmin() || isTenantAdmin(incoming().tenantId));
+      allow update: if isValidId(docId) && isValidMembership(incoming()) && (isSuperAdmin() || isTenantAdmin(existing().tenantId));
+      allow delete: if isValidId(docId) && (isSuperAdmin() || isTenantAdmin(existing().tenantId));
+    }
+    match /assets/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /assetCategories/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /assetAssignments/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /assetTransfers/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if false;
+      allow delete: if false;
+    }
+    match /assetMaintenance/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /softwareLicences/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /vendors/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /purchaseRequests/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /purchaseOrders/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /tickets/{ticketId} {
+      allow get: if allowTenantScopedGet(ticketId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(ticketId);
+      allow update: if allowTenantScopedUpdate(ticketId);
+      allow delete: if allowTenantScopedDelete(ticketId);
+
+      // Pillar 1 Master Gate: Subcollections fetch parent ticket using get()
+      match /comments/{commentId} {
+        allow get: if isValidId(ticketId) && isValidId(commentId) && (
+          isSuperAdmin() ||
+          canAccessTenantOrg(
+            get(/databases/$(database)/documents/tickets/$(ticketId)).data.tenantId,
+            get(/databases/$(database)/documents/tickets/$(ticketId)).data.orgId
+          )
+        );
+        allow list: if allowTenantScopedList();
+        allow create: if isVerifiedUser() &&
+          isValidId(ticketId) &&
+          isValidId(commentId) &&
+          isValidTicketComment(incoming(), ticketId) &&
+          incoming().createdAt == request.time &&
+          exists(/databases/$(database)/documents/tickets/$(ticketId)) &&
+          canAccessTenantOrg(
+            get(/databases/$(database)/documents/tickets/$(ticketId)).data.tenantId,
+            get(/databases/$(database)/documents/tickets/$(ticketId)).data.orgId
+          );
+        allow update, delete: if false;
+      }
+
+      match /attachments/{attachmentId} {
+        allow get: if isValidId(ticketId) && isValidId(attachmentId) && (
+          isSuperAdmin() ||
+          canAccessTenantOrg(
+            get(/databases/$(database)/documents/tickets/$(ticketId)).data.tenantId,
+            get(/databases/$(database)/documents/tickets/$(ticketId)).data.orgId
+          )
+        );
+        allow list: if allowTenantScopedList();
+        allow create: if isVerifiedUser() &&
+          isValidId(ticketId) &&
+          isValidId(attachmentId) &&
+          isValidTicketComment(incoming(), ticketId) &&
+          incoming().createdAt == request.time &&
+          exists(/databases/$(database)/documents/tickets/$(ticketId)) &&
+          canAccessTenantOrg(
+            get(/databases/$(database)/documents/tickets/$(ticketId)).data.tenantId,
+            get(/databases/$(database)/documents/tickets/$(ticketId)).data.orgId
+          );
+        allow update, delete: if false;
+      }
+    }
+    match /incidents/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /problems/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /changes/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /serviceRequests/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /serviceCatalogue/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /approvals/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if false;
+      allow delete: if false;
+    }
+    match /slaPolicies/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /contracts/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /knowledgeArticles/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /auditLogs/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update, delete: if false;
+    }
+    match /notifications/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /integrations/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+    match /customFields/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
+    }
+  }
+}

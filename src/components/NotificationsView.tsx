@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { api, ApiError } from '../lib/api.ts';
 import type { NotificationType, SystemNotification } from '../types/itams.ts';
+import type { NavSection } from './DashboardView.tsx';
 import { DataPagination } from './ui/DataPagination.tsx';
 import { EmptyState } from './ui/EmptyState.tsx';
 
@@ -19,6 +20,7 @@ interface NotificationsViewProps {
   onRefresh: () => Promise<void>;
   onOpenAsset: (assetId: string) => void;
   onOpenMaintenance: () => void;
+  onNavigate?: (section: NavSection) => void;
   onToast: (type: 'success' | 'error', message: string) => void;
 }
 
@@ -27,6 +29,7 @@ export function NotificationsView({
   onRefresh,
   onOpenAsset,
   onOpenMaintenance,
+  onNavigate,
   onToast,
 }: NotificationsViewProps) {
   const [filter, setFilter] = useState<'ALL' | 'UNREAD' | NotificationType>('ALL');
@@ -90,6 +93,9 @@ export function NotificationsView({
               ['expiring_warranty', 'Expiring Warranties'],
               ['overdue_maintenance', 'Overdue Maintenance'],
               ['replacement_due', 'Replacement Due'],
+              ['sla_breach', 'SLA Breaches'],
+              ['licence_expiry', 'Licence Renewals'],
+              ['subscription_alert', 'Subscription'],
             ] as const
           ).map(([key, label]) => {
             const active = filter === key;
@@ -98,7 +104,7 @@ export function NotificationsView({
                 key={key}
                 type="button"
                 onClick={() => setFilter(key)}
-                className={`relative px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                className={`relative px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   active
                     ? 'text-[var(--av-text)]'
                     : 'text-[var(--av-text-muted)] hover:text-[var(--av-text)]'
@@ -143,7 +149,7 @@ export function NotificationsView({
             <EmptyState
               icon={Bell}
               title="No notifications in this view"
-              description="Warranty expirations, overdue service tickets, and lifecycle refresh alerts appear here automatically."
+              description="Warranty expirations, SLA breaches, licence renewals, and overdue service alerts appear here automatically."
               actionLabel={filter !== 'ALL' ? 'Show All Alerts' : undefined}
               onAction={filter !== 'ALL' ? () => setFilter('ALL') : undefined}
             />
@@ -162,7 +168,32 @@ export function NotificationsView({
                     ? 'Warranty Alert'
                     : n.type === 'overdue_maintenance'
                       ? 'Overdue Maintenance'
-                      : 'Replacement Review';
+                      : n.type === 'sla_breach'
+                        ? 'Ticket SLA Breach'
+                        : n.type === 'licence_expiry'
+                          ? 'Licence Expiry'
+                          : n.type === 'subscription_alert'
+                            ? 'Subscription Alert'
+                            : 'Replacement Review';
+
+                const openTarget = () => {
+                  if (n.entity_type === 'maintenance') onOpenMaintenance();
+                  else if (n.entity_type === 'ticket' && onNavigate) onNavigate('tickets');
+                  else if (n.entity_type === 'licence' && onNavigate) onNavigate('licences');
+                  else if (n.entity_type === 'subscription' && onNavigate) onNavigate('billing');
+                  else if (n.asset_id) onOpenAsset(n.asset_id);
+                };
+
+                const openLabel =
+                  n.entity_type === 'maintenance'
+                    ? 'Open Service Log'
+                    : n.entity_type === 'ticket'
+                      ? 'Open Helpdesk'
+                      : n.entity_type === 'licence'
+                        ? 'Open Licences'
+                        : n.entity_type === 'subscription'
+                          ? 'Open Billing'
+                          : 'Inspect Asset';
 
                 return (
                   <div
@@ -223,18 +254,10 @@ export function NotificationsView({
                     <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
                       <button
                         type="button"
-                        onClick={() =>
-                          n.entity_type === 'maintenance'
-                            ? onOpenMaintenance()
-                            : onOpenAsset(n.asset_id)
-                        }
+                        onClick={openTarget}
                         className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-1.5 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap"
                       >
-                        <span>
-                          {n.entity_type === 'maintenance'
-                            ? 'Open Service Log'
-                            : 'Inspect Asset'}
-                        </span>
+                        <span>{openLabel}</span>
                         <ExternalLink className="h-3.5 w-3.5" />
                       </button>
 

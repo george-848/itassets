@@ -25,6 +25,19 @@ export function formatCurrencyExact(amount: number): string {
   }).format(amount || 0);
 }
 
+export function formatGhs(amount: number): string {
+  return `GH₵${new Intl.NumberFormat('en-GH', {
+    maximumFractionDigits: 0,
+  }).format(amount || 0)}`;
+}
+
+export function formatGhsExact(amount: number): string {
+  return `GH₵${new Intl.NumberFormat('en-GH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount || 0)}`;
+}
+
 export function AssetStatusIndicator({ status }: { status: AssetStatus }) {
   switch (status) {
     case 'Available':

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Express } from 'express';
 import { createApiApp, getSharedDatabase } from '../server/app.ts';
+import { getSharedSaasStore } from '../server/saasStore.ts';
 
 let cachedApp: Express | null = null;
 
@@ -18,8 +19,11 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     }
 
     if (!cachedApp) {
-      const db = await getSharedDatabase();
-      cachedApp = createApiApp(db);
+      const [db, saasStore] = await Promise.all([
+        getSharedDatabase(),
+        getSharedSaasStore(),
+      ]);
+      cachedApp = createApiApp(db, saasStore);
     }
 
     return cachedApp(req as Parameters<Express>[0], res as Parameters<Express>[1]);

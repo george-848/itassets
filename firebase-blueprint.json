@@ -1,0 +1,176 @@
+{
+  "entities": {
+    "PlatformPlan": {
+      "title": "PlatformPlan",
+      "description": "Configurable commercial SaaS subscription plan with GH₵ pricing, limits, and feature entitlements.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "code": { "type": "string", "enum": ["starter", "professional", "business", "enterprise"] },
+        "name": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "monthlyPriceGhs": { "type": "number" },
+        "annualPriceGhs": { "type": "number" },
+        "isPublic": { "type": "boolean" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "code", "name", "monthlyPriceGhs", "annualPriceGhs", "createdBy", "createdAt", "updatedAt"]
+    },
+    "TenantProfile": {
+      "title": "TenantProfile",
+      "description": "Paying SaaS customer account (Company or MSP) with strict tenantId isolation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "type": { "type": "string", "enum": ["company", "msp"] },
+        "status": { "type": "string", "enum": ["active", "suspended", "trial"] },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "planCode": { "type": "string", "enum": ["starter", "professional", "business", "enterprise"] },
+        "deploymentMode": { "type": "string", "enum": ["shared", "dedicated_enterprise"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "type", "status", "ownerUid", "planCode", "createdAt", "updatedAt"]
+    },
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Non-PII user display profile.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "department": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII user record (email, phone, MFA preference).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 180 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "mfaEnabled": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "updatedAt"]
+    },
+    "UserMembership": {
+      "title": "UserMembership",
+      "description": "Authoritative mapping between a Firebase UID, tenantId, role, permissions, and allowed orgIds.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 256, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "tenantId": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "status": { "type": "string", "enum": ["active", "invited", "suspended"] },
+        "orgAccessMode": { "type": "string", "enum": ["all", "selected"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "tenantId", "role", "status", "orgAccessMode", "createdAt", "updatedAt"]
+    },
+    "TenantScopedRecord": {
+      "title": "TenantScopedRecord",
+      "description": "Generic tenant- and organisation-scoped ITAM/ITSM record (assets, tickets, incidents, requests, licences, vendors, POs, SLA policies, contracts, KB, audit logs).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "tenantId": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orgId": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "status": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "tenantId", "orgId", "status", "createdBy", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "TicketCommentRecord": {
+      "title": "TicketCommentRecord",
+      "description": "Ticket reply or internal technician note stored under a ticket subcollection.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "tenantId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "orgId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "ticketId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "isInternal": { "type": "boolean" },
+        "body": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "tenantId", "orgId", "ticketId", "isInternal", "body", "createdBy", "createdAt"]
+    },
+    "SubscriptionTransaction": {
+      "title": "SubscriptionTransaction",
+      "description": "Subscription, Paystack payment, or invoice record protected against client tampering.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "tenantId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "status": { "type": "string", "minLength": 2, "maxLength": 48 },
+        "amountGhs": { "type": "number" },
+        "reference": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "tenantId", "status", "createdBy", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/platform/{docId}": { "schema": "PlatformPlan", "description": "Platform configuration root documents" },
+    "/plans/{planId}": { "schema": "PlatformPlan", "description": "Configurable SaaS pricing plans" },
+    "/subscriptions/{subscriptionId}": { "schema": "SubscriptionTransaction", "description": "Tenant subscription records" },
+    "/payments/{paymentId}": { "schema": "SubscriptionTransaction", "description": "Paystack and manual payment records" },
+    "/invoices/{invoiceId}": { "schema": "SubscriptionTransaction", "description": "Generated tenant invoices" },
+    "/tenantRegistry/{tenantId}": { "schema": "TenantProfile", "description": "Central tenant metadata directory" },
+    "/usage/{tenantId}": { "schema": "SubscriptionTransaction", "description": "Tenant resource usage counters" },
+    "/provisioningJobs/{jobId}": { "schema": "SubscriptionTransaction", "description": "Enterprise dedicated deployment tracking" },
+    "/platformSettings/{settingId}": { "schema": "PlatformPlan", "description": "Global platform branding, grace period, and gateway settings" },
+    "/platformAuditLogs/{logId}": { "schema": "TenantScopedRecord", "description": "Immutable platform super admin audit log" },
+    "/users/{uid}": { "schema": "UserPublicProfile", "description": "User public profile" },
+    "/users/{uid}/private/{docId}": { "schema": "UserPrivateInfo", "description": "Isolated user PII" },
+    "/users/{uid}/preferences/{docId}": { "schema": "UserPublicProfile", "description": "User UI and notification preferences" },
+    "/userMemberships/{membershipId}": { "schema": "UserMembership", "description": "User-to-tenant RBAC membership" },
+    "/tenants/{tenantId}": { "schema": "TenantProfile", "description": "Tenant root document" },
+    "/tenants/{tenantId}/config/{docId}": { "schema": "TenantProfile", "description": "Tenant settings, branding, and subscription snapshot" },
+    "/locations/{locationId}": { "schema": "TenantScopedRecord", "description": "Tenant and org physical locations" },
+    "/departments/{departmentId}": { "schema": "TenantScopedRecord", "description": "Tenant and org departments" },
+    "/clientOrganisations/{orgId}": { "schema": "TenantScopedRecord", "description": "Company primary org or MSP client organisations" },
+    "/members/{memberId}": { "schema": "UserMembership", "description": "Tenant members directory" },
+    "/assets/{assetId}": { "schema": "TenantScopedRecord", "description": "Tenant and org IT hardware assets" },
+    "/assetCategories/{categoryId}": { "schema": "TenantScopedRecord", "description": "Configurable asset categories" },
+    "/assetAssignments/{assignmentId}": { "schema": "TenantScopedRecord", "description": "Asset custody assignment records" },
+    "/assetTransfers/{transferId}": { "schema": "TenantScopedRecord", "description": "Asset ownership/location transfer logs" },
+    "/assetMaintenance/{maintenanceId}": { "schema": "TenantScopedRecord", "description": "Preventive and corrective maintenance records" },
+    "/softwareLicences/{licenceId}": { "schema": "TenantScopedRecord", "description": "Software licence inventory" },
+    "/vendors/{vendorId}": { "schema": "TenantScopedRecord", "description": "Approved suppliers and vendors" },
+    "/purchaseRequests/{prId}": { "schema": "TenantScopedRecord", "description": "Purchase requisition and approval workflow" },
+    "/purchaseOrders/{poId}": { "schema": "TenantScopedRecord", "description": "Issued purchase orders" },
+    "/tickets/{ticketId}": { "schema": "TenantScopedRecord", "description": "Helpdesk tickets" },
+    "/tickets/{ticketId}/comments/{commentId}": { "schema": "TicketCommentRecord", "description": "Ticket replies and internal notes" },
+    "/tickets/{ticketId}/attachments/{attachmentId}": { "schema": "TicketCommentRecord", "description": "Ticket attachment metadata" },
+    "/incidents/{incidentId}": { "schema": "TenantScopedRecord", "description": "ITSM incidents" },
+    "/problems/{problemId}": { "schema": "TenantScopedRecord", "description": "ITSM problem records and root causes" },
+    "/changes/{changeId}": { "schema": "TenantScopedRecord", "description": "ITSM change requests and approvals" },
+    "/serviceRequests/{requestId}": { "schema": "TenantScopedRecord", "description": "ITSM service requests" },
+    "/serviceCatalogue/{itemId}": { "schema": "TenantScopedRecord", "description": "Configurable service catalogue items" },
+    "/approvals/{approvalId}": { "schema": "TenantScopedRecord", "description": "Approval audit decisions" },
+    "/slaPolicies/{policyId}": { "schema": "TenantScopedRecord", "description": "Priority- and client-scoped SLA policies" },
+    "/contracts/{contractId}": { "schema": "TenantScopedRecord", "description": "MSP client service contracts" },
+    "/knowledgeArticles/{articleId}": { "schema": "TenantScopedRecord", "description": "ITSM knowledge base articles" },
+    "/auditLogs/{auditId}": { "schema": "TenantScopedRecord", "description": "Tenant immutable audit trail" },
+    "/notifications/{notificationId}": { "schema": "TenantScopedRecord", "description": "Tenant user notifications" },
+    "/integrations/{integrationId}": { "schema": "TenantScopedRecord", "description": "Tenant integration configs" },
+    "/customFields/{fieldId}": { "schema": "TenantScopedRecord", "description": "Tenant custom field schemas" }
+  }
+}

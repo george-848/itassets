@@ -24,6 +24,11 @@ export interface NotificationAck {
   acknowledged_at: string;
 }
 
+export interface TenantScopeFilter {
+  tenantId: string;
+  orgIds?: string[] | null;
+}
+
 export interface ItamsDatabase {
   readonly engine: DatabaseEngine;
   init(): Promise<void>;
@@ -36,26 +41,39 @@ export interface ItamsDatabase {
   createUser(user: StoredUser): Promise<User>;
   updateUser(
     id: string,
-    patch: Partial<Pick<StoredUser, 'name' | 'email' | 'role' | 'department' | 'status' | 'password_hash'>>
+    patch: Partial<
+      Pick<
+        StoredUser,
+        | 'name'
+        | 'email'
+        | 'role'
+        | 'department'
+        | 'status'
+        | 'password_hash'
+        | 'email_verified'
+        | 'mfa_enabled'
+        | 'is_super_admin'
+      >
+    >
   ): Promise<User | null>;
   deleteUser(id: string): Promise<boolean>;
 
   // Employees
-  listEmployees(): Promise<Employee[]>;
+  listEmployees(scope?: TenantScopeFilter): Promise<Employee[]>;
   getEmployeeById(id: string): Promise<Employee | null>;
   createEmployee(employee: Employee): Promise<Employee>;
   updateEmployee(id: string, patch: Partial<Employee>): Promise<Employee | null>;
   deleteEmployee(id: string): Promise<boolean>;
 
   // Assets
-  listAssets(): Promise<Asset[]>;
+  listAssets(scope?: TenantScopeFilter): Promise<Asset[]>;
   getAssetById(id: string): Promise<Asset | null>;
   createAsset(asset: Asset): Promise<Asset>;
   updateAsset(id: string, patch: Partial<Asset>): Promise<Asset | null>;
   deleteAsset(id: string): Promise<boolean>;
 
   // Assignments
-  listAssignments(): Promise<AssetAssignment[]>;
+  listAssignments(scope?: TenantScopeFilter): Promise<AssetAssignment[]>;
   listAssignmentsByAsset(assetId: string): Promise<AssetAssignment[]>;
   listAssignmentsByEmployee(employeeId: string): Promise<AssetAssignment[]>;
   getAssignmentById(id: string): Promise<AssetAssignment | null>;
@@ -66,6 +84,8 @@ export interface ItamsDatabase {
     assignedDate: string;
     conditionOut: string;
     notes: string;
+    tenantId?: string;
+    orgId?: string;
   }): Promise<AssetAssignment>;
   returnAsset(params: {
     assignmentId: string;
@@ -76,7 +96,7 @@ export interface ItamsDatabase {
   }): Promise<AssetAssignment>;
 
   // Maintenance
-  listMaintenanceLogs(): Promise<MaintenanceLog[]>;
+  listMaintenanceLogs(scope?: TenantScopeFilter): Promise<MaintenanceLog[]>;
   listMaintenanceByAsset(assetId: string): Promise<MaintenanceLog[]>;
   getMaintenanceById(id: string): Promise<MaintenanceLog | null>;
   createMaintenanceLog(
@@ -90,17 +110,43 @@ export interface ItamsDatabase {
   deleteMaintenanceLog(id: string): Promise<boolean>;
 
   // Notifications & Dashboard
-  listNotifications(userId: string): Promise<SystemNotification[]>;
+  listNotifications(userId: string, scope?: TenantScopeFilter): Promise<SystemNotification[]>;
   acknowledgeNotifications(userId: string, alertKeys: string[]): Promise<void>;
-  getDashboardSummary(userId: string): Promise<DashboardSummary>;
+  getDashboardSummary(userId: string, scope?: TenantScopeFilter): Promise<DashboardSummary>;
+  resetToCleanState(): Promise<void>;
+}
+
+function matchesScope<T extends { tenant_id?: string; org_id?: string }>(
+  row: T,
+  scope?: TenantScopeFilter
+): boolean {
+  if (!scope) return true;
+  const rowTenant = row.tenant_id || 'ten-default-01';
+  if (rowTenant !== scope.tenantId) return false;
+  if (scope.orgIds && scope.orgIds.length >= 0) {
+    const rowOrg = row.org_id || 'org-default-01';
+    return scope.orgIds.includes(rowOrg);
+  }
+  return true;
+}
+
+function normalizeUserRecord(user: StoredUser): StoredUser {
+  return {
+    ...user,
+    email_verified:
+      user.email_verified === undefined ? true : Boolean(user.email_verified),
+    mfa_enabled: Boolean(user.mfa_enabled),
+    is_super_admin: Boolean(user.is_super_admin),
+  };
 }
 
 function stripPassword(user: StoredUser): User {
-  const { password_hash: _ignored, ...safe } = user;
+  const normalized = normalizeUserRecord(user);
+  const { password_hash: _ignored, ...safe } = normalized;
   return safe;
 }
 
-function computeNotifications(
+export function computeNotifications(
   assets: Asset[],
   maintenanceLogs: MaintenanceLog[],
   acks: NotificationAck[]
@@ -224,7 +270,7 @@ function computeNotifications(
   return notifications;
 }
 
-function buildDashboardSummary(
+export function buildDashboardSummary(
   assets: Asset[],
   employees: Employee[],
   assignments: AssetAssignment[],
@@ -421,26 +467,78 @@ class MongoItamsDatabase implements ItamsDatabase {
     await this.client.connect();
     this.db = this.client.db(this.dbName);
 
+    const dropSafe = async (col: string, idx: string) => {
+      try {
+        await this.db.collection(col).dropIndex(idx);
+      } catch {
+        // Index may already be migrated
+      }
+    };
+    await Promise.all([
+      dropSafe('employees', 'employee_code_1'),
+      dropSafe('employees', 'email_1'),
+      dropSafe('assets', 'asset_tag_1'),
+      dropSafe('assets', 'serial_number_1'),
+      dropSafe('assignments', 'handover_number_1'),
+    ]);
+
     await Promise.all([
       this.db.collection('users').createIndex({ id: 1 }, { unique: true }),
       this.db.collection('users').createIndex({ email: 1 }, { unique: true }),
       this.db.collection('employees').createIndex({ id: 1 }, { unique: true }),
-      this.db.collection('employees').createIndex({ employee_code: 1 }, { unique: true }),
-      this.db.collection('employees').createIndex({ email: 1 }, { unique: true }),
+      this.db
+        .collection('employees')
+        .createIndex({ tenant_id: 1, employee_code: 1 }, { unique: true }),
+      this.db
+        .collection('employees')
+        .createIndex({ tenant_id: 1, email: 1 }, { unique: true }),
       this.db.collection('assets').createIndex({ id: 1 }, { unique: true }),
-      this.db.collection('assets').createIndex({ asset_tag: 1 }, { unique: true }),
-      this.db.collection('assets').createIndex({ serial_number: 1 }, { unique: true }),
+      this.db
+        .collection('assets')
+        .createIndex({ tenant_id: 1, asset_tag: 1 }, { unique: true }),
+      this.db
+        .collection('assets')
+        .createIndex({ tenant_id: 1, serial_number: 1 }, { unique: true }),
       this.db.collection('assignments').createIndex({ id: 1 }, { unique: true }),
-      this.db.collection('assignments').createIndex({ handover_number: 1 }, { unique: true }),
+      this.db
+        .collection('assignments')
+        .createIndex({ tenant_id: 1, handover_number: 1 }, { unique: true }),
       this.db.collection('maintenance_logs').createIndex({ id: 1 }, { unique: true }),
       this.db
         .collection('notification_acks')
         .createIndex({ alert_key: 1, user_id: 1 }, { unique: true }),
     ]);
 
+    await Promise.all([
+      this.db
+        .collection('employees')
+        .updateMany(
+          { tenant_id: { $exists: false } },
+          { $set: { tenant_id: 'ten-default-01', org_id: 'org-default-01' } }
+        ),
+      this.db
+        .collection('assets')
+        .updateMany(
+          { tenant_id: { $exists: false } },
+          { $set: { tenant_id: 'ten-default-01', org_id: 'org-default-01' } }
+        ),
+      this.db
+        .collection('assignments')
+        .updateMany(
+          { tenant_id: { $exists: false } },
+          { $set: { tenant_id: 'ten-default-01', org_id: 'org-default-01' } }
+        ),
+      this.db
+        .collection('maintenance_logs')
+        .updateMany(
+          { tenant_id: { $exists: false } },
+          { $set: { tenant_id: 'ten-default-01', org_id: 'org-default-01' } }
+        ),
+    ]);
+
+    const seed = createSeedData();
     const userCount = await this.db.collection('users').countDocuments();
     if (userCount === 0) {
-      const seed = createSeedData();
       if (seed.users.length > 0) {
         await this.db.collection('users').insertMany(seed.users);
       }
@@ -458,13 +556,26 @@ class MongoItamsDatabase implements ItamsDatabase {
           .collection('maintenance_logs')
           .insertMany(seed.maintenanceLogs);
       }
+    } else {
+      const superSeed = seed.users.find((u) => u.is_super_admin);
+      if (superSeed) {
+        const existingSuper = await this.findUserByEmail(superSeed.email);
+        if (!existingSuper) {
+          await this.db.collection('users').insertOne({ ...superSeed });
+        } else if (!existingSuper.is_super_admin) {
+          await this.db
+            .collection('users')
+            .updateOne({ id: existingSuper.id }, { $set: { is_super_admin: true, email_verified: true } });
+        }
+      }
     }
   }
 
   async findUserByEmail(email: string): Promise<StoredUser | null> {
-    return this.db
+    const doc = await this.db
       .collection<StoredUser>('users')
       .findOne({ email: email.toLowerCase().trim() }, { projection: { _id: 0 } });
+    return doc ? normalizeUserRecord(doc) : null;
   }
 
   async findUserById(id: string): Promise<User | null> {
@@ -496,7 +607,20 @@ class MongoItamsDatabase implements ItamsDatabase {
 
   async updateUser(
     id: string,
-    patch: Partial<Pick<StoredUser, 'name' | 'email' | 'role' | 'department' | 'status' | 'password_hash'>>
+    patch: Partial<
+      Pick<
+        StoredUser,
+        | 'name'
+        | 'email'
+        | 'role'
+        | 'department'
+        | 'status'
+        | 'password_hash'
+        | 'email_verified'
+        | 'mfa_enabled'
+        | 'is_super_admin'
+      >
+    >
   ): Promise<User | null> {
     await this.db.collection('users').updateOne({ id }, { $set: patch });
     return this.findUserById(id);
@@ -507,7 +631,7 @@ class MongoItamsDatabase implements ItamsDatabase {
     return res.deletedCount > 0;
   }
 
-  async listEmployees(): Promise<Employee[]> {
+  async listEmployees(scope?: TenantScopeFilter): Promise<Employee[]> {
     const [employees, assets] = await Promise.all([
       this.db
         .collection<Employee>('employees')
@@ -516,16 +640,18 @@ class MongoItamsDatabase implements ItamsDatabase {
         .toArray(),
       this.db
         .collection<Asset>('assets')
-        .find({ status: 'Assigned' }, { projection: { _id: 0, assigned_employee_id: 1 } })
+        .find({ status: 'Assigned' }, { projection: { _id: 0, assigned_employee_id: 1, tenant_id: 1, org_id: 1 } })
         .toArray(),
     ]);
+    const scopedEmployees = employees.filter((e) => matchesScope(e, scope));
     const counts = new Map<string, number>();
     for (const a of assets) {
+      if (!matchesScope(a, scope)) continue;
       if (a.assigned_employee_id) {
         counts.set(a.assigned_employee_id, (counts.get(a.assigned_employee_id) ?? 0) + 1);
       }
     }
-    return employees.map((e) => ({ ...e, assigned_count: counts.get(e.id) ?? 0 }));
+    return scopedEmployees.map((e) => ({ ...e, assigned_count: counts.get(e.id) ?? 0 }));
   }
 
   async getEmployeeById(id: string): Promise<Employee | null> {
@@ -540,8 +666,13 @@ class MongoItamsDatabase implements ItamsDatabase {
   }
 
   async createEmployee(employee: Employee): Promise<Employee> {
-    await this.db.collection<Employee>('employees').insertOne({ ...employee });
-    return { ...employee, assigned_count: 0 };
+    const doc = {
+      ...employee,
+      tenant_id: employee.tenant_id || 'ten-default-01',
+      org_id: employee.org_id || 'org-default-01',
+    };
+    await this.db.collection<Employee>('employees').insertOne(doc);
+    return { ...doc, assigned_count: 0 };
   }
 
   async updateEmployee(id: string, patch: Partial<Employee>): Promise<Employee | null> {
@@ -554,7 +685,7 @@ class MongoItamsDatabase implements ItamsDatabase {
     return res.deletedCount > 0;
   }
 
-  async listAssets(): Promise<Asset[]> {
+  async listAssets(scope?: TenantScopeFilter): Promise<Asset[]> {
     const [assets, employees] = await Promise.all([
       this.db
         .collection<Asset>('assets')
@@ -566,7 +697,8 @@ class MongoItamsDatabase implements ItamsDatabase {
         .find({}, { projection: { _id: 0 } })
         .toArray(),
     ]);
-    return enrichAssets(assets, employees);
+    const scopedAssets = assets.filter((a) => matchesScope(a, scope));
+    return enrichAssets(scopedAssets, employees);
   }
 
   async getAssetById(id: string): Promise<Asset | null> {
@@ -582,8 +714,13 @@ class MongoItamsDatabase implements ItamsDatabase {
   }
 
   async createAsset(asset: Asset): Promise<Asset> {
-    await this.db.collection<Asset>('assets').insertOne({ ...asset });
-    return (await this.getAssetById(asset.id)) ?? asset;
+    const doc = {
+      ...asset,
+      tenant_id: asset.tenant_id || 'ten-default-01',
+      org_id: asset.org_id || 'org-default-01',
+    };
+    await this.db.collection<Asset>('assets').insertOne(doc);
+    return (await this.getAssetById(asset.id)) ?? doc;
   }
 
   async updateAsset(id: string, patch: Partial<Asset>): Promise<Asset | null> {
@@ -603,7 +740,7 @@ class MongoItamsDatabase implements ItamsDatabase {
     return false;
   }
 
-  async listAssignments(): Promise<AssetAssignment[]> {
+  async listAssignments(scope?: TenantScopeFilter): Promise<AssetAssignment[]> {
     const [assignments, assets, employees, users] = await Promise.all([
       this.db
         .collection<AssetAssignment>('assignments')
@@ -614,7 +751,8 @@ class MongoItamsDatabase implements ItamsDatabase {
       this.db.collection<Employee>('employees').find({}, { projection: { _id: 0 } }).toArray(),
       this.db.collection<StoredUser>('users').find({}, { projection: { _id: 0 } }).toArray(),
     ]);
-    return enrichAssignments(assignments, assets, employees, users);
+    const scopedAssignments = assignments.filter((a) => matchesScope(a, scope));
+    return enrichAssignments(scopedAssignments, assets, employees, users);
   }
 
   async listAssignmentsByAsset(assetId: string): Promise<AssetAssignment[]> {
@@ -639,11 +777,18 @@ class MongoItamsDatabase implements ItamsDatabase {
     assignedDate: string;
     conditionOut: string;
     notes: string;
+    tenantId?: string;
+    orgId?: string;
   }): Promise<AssetAssignment> {
+    const tenantId = params.tenantId || 'ten-default-01';
+    const orgId = params.orgId || 'org-default-01';
     const existing = await this.db
       .collection<AssetAssignment>('assignments')
-      .find({}, { projection: { _id: 0, handover_number: 1 } })
+      .find({}, { projection: { _id: 0, handover_number: 1, tenant_id: 1 } })
       .toArray();
+    const tenantExisting = existing.filter(
+      (a) => (a.tenant_id || 'ten-default-01') === tenantId
+    );
     const now = new Date().toISOString();
     const record: AssetAssignment = {
       id: `asg-${crypto.randomUUID().slice(0, 8)}`,
@@ -654,10 +799,12 @@ class MongoItamsDatabase implements ItamsDatabase {
       returned_date: null,
       condition_out: params.conditionOut,
       condition_in: null,
-      handover_number: nextHandoverNumber(existing),
+      handover_number: nextHandoverNumber(tenantExisting),
       notes: params.notes,
       status: 'Active',
       created_at: now,
+      tenant_id: tenantId,
+      org_id: orgId,
     };
 
     await this.db.collection<AssetAssignment>('assignments').insertOne({ ...record });
@@ -721,7 +868,7 @@ class MongoItamsDatabase implements ItamsDatabase {
     return (await this.getAssignmentById(params.assignmentId))!;
   }
 
-  async listMaintenanceLogs(): Promise<MaintenanceLog[]> {
+  async listMaintenanceLogs(scope?: TenantScopeFilter): Promise<MaintenanceLog[]> {
     const [logs, assets, users] = await Promise.all([
       this.db
         .collection<MaintenanceLog>('maintenance_logs')
@@ -731,7 +878,8 @@ class MongoItamsDatabase implements ItamsDatabase {
       this.db.collection<Asset>('assets').find({}, { projection: { _id: 0 } }).toArray(),
       this.db.collection<StoredUser>('users').find({}, { projection: { _id: 0 } }).toArray(),
     ]);
-    return enrichMaintenance(logs, assets, users);
+    const scopedLogs = logs.filter((m) => matchesScope(m, scope));
+    return enrichMaintenance(scopedLogs, assets, users);
   }
 
   async listMaintenanceByAsset(assetId: string): Promise<MaintenanceLog[]> {
@@ -748,14 +896,19 @@ class MongoItamsDatabase implements ItamsDatabase {
     log: MaintenanceLog,
     setAssetUnderMaintenance: boolean
   ): Promise<MaintenanceLog> {
-    await this.db.collection<MaintenanceLog>('maintenance_logs').insertOne({ ...log });
+    const doc = {
+      ...log,
+      tenant_id: log.tenant_id || 'ten-default-01',
+      org_id: log.org_id || 'org-default-01',
+    };
+    await this.db.collection<MaintenanceLog>('maintenance_logs').insertOne(doc);
     if (setAssetUnderMaintenance && log.status !== 'Completed') {
       await this.db.collection('assets').updateOne(
         { id: log.asset_id },
         { $set: { status: 'Under Maintenance', updated_at: new Date().toISOString() } }
       );
     }
-    return (await this.getMaintenanceById(log.id)) ?? log;
+    return (await this.getMaintenanceById(log.id)) ?? doc;
   }
 
   async updateMaintenanceLog(
@@ -797,10 +950,13 @@ class MongoItamsDatabase implements ItamsDatabase {
     return res.deletedCount > 0;
   }
 
-  async listNotifications(userId: string): Promise<SystemNotification[]> {
+  async listNotifications(
+    userId: string,
+    scope?: TenantScopeFilter
+  ): Promise<SystemNotification[]> {
     const [assets, logs, acks] = await Promise.all([
-      this.listAssets(),
-      this.listMaintenanceLogs(),
+      this.listAssets(scope),
+      this.listMaintenanceLogs(scope),
       this.db
         .collection<NotificationAck>('notification_acks')
         .find({ user_id: userId }, { projection: { _id: 0 } })
@@ -827,15 +983,33 @@ class MongoItamsDatabase implements ItamsDatabase {
     }
   }
 
-  async getDashboardSummary(userId: string): Promise<DashboardSummary> {
+  async getDashboardSummary(
+    userId: string,
+    scope?: TenantScopeFilter
+  ): Promise<DashboardSummary> {
     const [assets, employees, assignments, logs, notifications] = await Promise.all([
-      this.listAssets(),
-      this.listEmployees(),
-      this.listAssignments(),
-      this.listMaintenanceLogs(),
-      this.listNotifications(userId),
+      this.listAssets(scope),
+      this.listEmployees(scope),
+      this.listAssignments(scope),
+      this.listMaintenanceLogs(scope),
+      this.listNotifications(userId, scope),
     ]);
     return buildDashboardSummary(assets, employees, assignments, logs, notifications);
+  }
+
+  async resetToCleanState(): Promise<void> {
+    await Promise.all([
+      this.db.collection('notification_acks').deleteMany({}),
+      this.db.collection('maintenance_logs').deleteMany({}),
+      this.db.collection('assignments').deleteMany({}),
+      this.db.collection('assets').deleteMany({}),
+      this.db.collection('employees').deleteMany({}),
+      this.db.collection('users').deleteMany({}),
+    ]);
+    const seed = createSeedData();
+    if (seed.users.length > 0) {
+      await this.db.collection('users').insertMany(seed.users);
+    }
   }
 }
 
@@ -868,30 +1042,37 @@ class SqliteItamsDatabase implements ItamsDatabase {
         department TEXT NOT NULL,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        last_login TEXT
+        last_login TEXT,
+        email_verified INTEGER NOT NULL DEFAULT 1,
+        mfa_enabled INTEGER NOT NULL DEFAULT 0,
+        is_super_admin INTEGER NOT NULL DEFAULT 0
       );
 
       CREATE TABLE IF NOT EXISTS employees (
         id TEXT PRIMARY KEY,
-        employee_code TEXT NOT NULL UNIQUE,
+        employee_code TEXT NOT NULL,
         full_name TEXT NOT NULL,
-        email TEXT NOT NULL UNIQUE,
+        email TEXT NOT NULL,
         department TEXT NOT NULL,
         job_title TEXT NOT NULL,
         phone TEXT NOT NULL,
         location TEXT NOT NULL,
         status TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT 'ten-default-01',
+        org_id TEXT NOT NULL DEFAULT 'org-default-01',
+        UNIQUE(tenant_id, employee_code),
+        UNIQUE(tenant_id, email)
       );
 
       CREATE TABLE IF NOT EXISTS assets (
         id TEXT PRIMARY KEY,
-        asset_tag TEXT NOT NULL UNIQUE,
+        asset_tag TEXT NOT NULL,
         name TEXT NOT NULL,
         category TEXT NOT NULL,
         brand TEXT NOT NULL,
         model TEXT NOT NULL,
-        serial_number TEXT NOT NULL UNIQUE,
+        serial_number TEXT NOT NULL,
         purchase_date TEXT NOT NULL,
         cost REAL NOT NULL,
         warranty_expiry TEXT NOT NULL,
@@ -901,7 +1082,11 @@ class SqliteItamsDatabase implements ItamsDatabase {
         location TEXT NOT NULL,
         notes TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT 'ten-default-01',
+        org_id TEXT NOT NULL DEFAULT 'org-default-01',
+        UNIQUE(tenant_id, asset_tag),
+        UNIQUE(tenant_id, serial_number)
       );
 
       CREATE TABLE IF NOT EXISTS assignments (
@@ -913,10 +1098,13 @@ class SqliteItamsDatabase implements ItamsDatabase {
         returned_date TEXT,
         condition_out TEXT NOT NULL,
         condition_in TEXT,
-        handover_number TEXT NOT NULL UNIQUE,
+        handover_number TEXT NOT NULL,
         notes TEXT NOT NULL,
         status TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT 'ten-default-01',
+        org_id TEXT NOT NULL DEFAULT 'org-default-01',
+        UNIQUE(tenant_id, handover_number)
       );
 
       CREATE TABLE IF NOT EXISTS maintenance_logs (
@@ -931,7 +1119,9 @@ class SqliteItamsDatabase implements ItamsDatabase {
         status TEXT NOT NULL,
         recorded_by_user_id TEXT NOT NULL,
         notes TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT 'ten-default-01',
+        org_id TEXT NOT NULL DEFAULT 'org-default-01'
       );
 
       CREATE TABLE IF NOT EXISTS notification_acks (
@@ -943,14 +1133,75 @@ class SqliteItamsDatabase implements ItamsDatabase {
       );
     `);
 
+    const hasCol = (table: string, col: string) => {
+      const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+        name: string;
+      }>;
+      return cols.some((c) => c.name === col);
+    };
+
+    if (!hasCol('users', 'is_super_admin')) {
+      this.db.exec(`
+        ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE users ADD COLUMN mfa_enabled INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0;
+      `);
+    }
+
+    if (!hasCol('assets', 'tenant_id')) {
+      // Safe migration of legacy global-unique SQLite tables to tenant-scoped unique tables
+      this.db.exec(`
+        CREATE TABLE employees_v2 (
+          id TEXT PRIMARY KEY, employee_code TEXT NOT NULL, full_name TEXT NOT NULL, email TEXT NOT NULL,
+          department TEXT NOT NULL, job_title TEXT NOT NULL, phone TEXT NOT NULL, location TEXT NOT NULL,
+          status TEXT NOT NULL, created_at TEXT NOT NULL,
+          tenant_id TEXT NOT NULL DEFAULT 'ten-default-01', org_id TEXT NOT NULL DEFAULT 'org-default-01',
+          UNIQUE(tenant_id, employee_code), UNIQUE(tenant_id, email)
+        );
+        INSERT INTO employees_v2 SELECT id, employee_code, full_name, email, department, job_title, phone, location, status, created_at, 'ten-default-01', 'org-default-01' FROM employees;
+        DROP TABLE employees;
+        ALTER TABLE employees_v2 RENAME TO employees;
+
+        CREATE TABLE assets_v2 (
+          id TEXT PRIMARY KEY, asset_tag TEXT NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL,
+          brand TEXT NOT NULL, model TEXT NOT NULL, serial_number TEXT NOT NULL, purchase_date TEXT NOT NULL,
+          cost REAL NOT NULL, warranty_expiry TEXT NOT NULL, status TEXT NOT NULL, assigned_employee_id TEXT,
+          assigned_date TEXT, location TEXT NOT NULL, notes TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          tenant_id TEXT NOT NULL DEFAULT 'ten-default-01', org_id TEXT NOT NULL DEFAULT 'org-default-01',
+          UNIQUE(tenant_id, asset_tag), UNIQUE(tenant_id, serial_number)
+        );
+        INSERT INTO assets_v2 SELECT id, asset_tag, name, category, brand, model, serial_number, purchase_date, cost, warranty_expiry, status, assigned_employee_id, assigned_date, location, notes, created_at, updated_at, 'ten-default-01', 'org-default-01' FROM assets;
+        DROP TABLE assets;
+        ALTER TABLE assets_v2 RENAME TO assets;
+
+        CREATE TABLE assignments_v2 (
+          id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, employee_id TEXT NOT NULL, assigned_by_user_id TEXT NOT NULL,
+          assigned_date TEXT NOT NULL, returned_date TEXT, condition_out TEXT NOT NULL, condition_in TEXT,
+          handover_number TEXT NOT NULL, notes TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
+          tenant_id TEXT NOT NULL DEFAULT 'ten-default-01', org_id TEXT NOT NULL DEFAULT 'org-default-01',
+          UNIQUE(tenant_id, handover_number)
+        );
+        INSERT INTO assignments_v2 SELECT id, asset_id, employee_id, assigned_by_user_id, assigned_date, returned_date, condition_out, condition_in, handover_number, notes, status, created_at, 'ten-default-01', 'org-default-01' FROM assignments;
+        DROP TABLE assignments;
+        ALTER TABLE assignments_v2 RENAME TO assignments;
+      `);
+    }
+
+    if (!hasCol('maintenance_logs', 'tenant_id')) {
+      this.db.exec(`
+        ALTER TABLE maintenance_logs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'ten-default-01';
+        ALTER TABLE maintenance_logs ADD COLUMN org_id TEXT NOT NULL DEFAULT 'org-default-01';
+      `);
+    }
+
+    const seed = createSeedData();
     const row = this.db.prepare('SELECT COUNT(*) AS cnt FROM users').get() as {
       cnt: number;
     };
     if (row.cnt === 0) {
-      const seed = createSeedData();
       const insertUser = this.db.prepare(
-        `INSERT INTO users (id, name, email, password_hash, role, department, status, created_at, last_login)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO users (id, name, email, password_hash, role, department, status, created_at, last_login, email_verified, mfa_enabled, is_super_admin)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const u of seed.users) {
         insertUser.run(
@@ -962,13 +1213,16 @@ class SqliteItamsDatabase implements ItamsDatabase {
           u.department,
           u.status,
           u.created_at,
-          u.last_login
+          u.last_login,
+          u.email_verified === false ? 0 : 1,
+          u.mfa_enabled ? 1 : 0,
+          u.is_super_admin ? 1 : 0
         );
       }
 
       const insertEmp = this.db.prepare(
-        `INSERT INTO employees (id, employee_code, full_name, email, department, job_title, phone, location, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO employees (id, employee_code, full_name, email, department, job_title, phone, location, status, created_at, tenant_id, org_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const e of seed.employees) {
         insertEmp.run(
@@ -981,13 +1235,15 @@ class SqliteItamsDatabase implements ItamsDatabase {
           e.phone,
           e.location,
           e.status,
-          e.created_at
+          e.created_at,
+          e.tenant_id || 'ten-default-01',
+          e.org_id || 'org-default-01'
         );
       }
 
       const insertAsset = this.db.prepare(
-        `INSERT INTO assets (id, asset_tag, name, category, brand, model, serial_number, purchase_date, cost, warranty_expiry, status, assigned_employee_id, assigned_date, location, notes, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO assets (id, asset_tag, name, category, brand, model, serial_number, purchase_date, cost, warranty_expiry, status, assigned_employee_id, assigned_date, location, notes, created_at, updated_at, tenant_id, org_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const a of seed.assets) {
         insertAsset.run(
@@ -1007,13 +1263,15 @@ class SqliteItamsDatabase implements ItamsDatabase {
           a.location,
           a.notes,
           a.created_at,
-          a.updated_at
+          a.updated_at,
+          a.tenant_id || 'ten-default-01',
+          a.org_id || 'org-default-01'
         );
       }
 
       const insertAsg = this.db.prepare(
-        `INSERT INTO assignments (id, asset_id, employee_id, assigned_by_user_id, assigned_date, returned_date, condition_out, condition_in, handover_number, notes, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO assignments (id, asset_id, employee_id, assigned_by_user_id, assigned_date, returned_date, condition_out, condition_in, handover_number, notes, status, created_at, tenant_id, org_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const g of seed.assignments) {
         insertAsg.run(
@@ -1028,13 +1286,15 @@ class SqliteItamsDatabase implements ItamsDatabase {
           g.handover_number,
           g.notes,
           g.status,
-          g.created_at
+          g.created_at,
+          g.tenant_id || 'ten-default-01',
+          g.org_id || 'org-default-01'
         );
       }
 
       const insertMnt = this.db.prepare(
-        `INSERT INTO maintenance_logs (id, asset_id, issue_description, maintenance_type, vendor_or_technician, service_date, next_service_date, cost, status, recorded_by_user_id, notes, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO maintenance_logs (id, asset_id, issue_description, maintenance_type, vendor_or_technician, service_date, next_service_date, cost, status, recorded_by_user_id, notes, created_at, tenant_id, org_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
       for (const m of seed.maintenanceLogs) {
         insertMnt.run(
@@ -1049,23 +1309,58 @@ class SqliteItamsDatabase implements ItamsDatabase {
           m.status,
           m.recorded_by_user_id,
           m.notes,
-          m.created_at
+          m.created_at,
+          m.tenant_id || 'ten-default-01',
+          m.org_id || 'org-default-01'
         );
+      }
+    } else {
+      const superSeed = seed.users.find((u) => u.is_super_admin);
+      if (superSeed) {
+        const existingSuper = await this.findUserByEmail(superSeed.email);
+        if (!existingSuper) {
+          this.db
+            .prepare(
+              `INSERT INTO users (id, name, email, password_hash, role, department, status, created_at, last_login, email_verified, mfa_enabled, is_super_admin)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .run(
+              superSeed.id,
+              superSeed.name,
+              superSeed.email,
+              superSeed.password_hash,
+              superSeed.role,
+              superSeed.department,
+              superSeed.status,
+              superSeed.created_at,
+              superSeed.last_login,
+              1,
+              0,
+              1
+            );
+        } else if (!existingSuper.is_super_admin) {
+          this.db
+            .prepare(
+              'UPDATE users SET is_super_admin = 1, email_verified = 1 WHERE id = ?'
+            )
+            .run(existingSuper.id);
+        }
       }
     }
   }
 
   private getAllStoredUsers(): StoredUser[] {
-    return this.db
+    const rows = this.db
       .prepare('SELECT * FROM users ORDER BY created_at ASC')
       .all() as unknown as StoredUser[];
+    return rows.map(normalizeUserRecord);
   }
 
   async findUserByEmail(email: string): Promise<StoredUser | null> {
     const row = this.db
       .prepare('SELECT * FROM users WHERE LOWER(email) = ?')
       .get(email.toLowerCase().trim()) as unknown as StoredUser | undefined;
-    return row ?? null;
+    return row ? normalizeUserRecord(row) : null;
   }
 
   async findUserById(id: string): Promise<User | null> {
@@ -1086,8 +1381,8 @@ class SqliteItamsDatabase implements ItamsDatabase {
   async createUser(user: StoredUser): Promise<User> {
     this.db
       .prepare(
-        `INSERT INTO users (id, name, email, password_hash, role, department, status, created_at, last_login)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO users (id, name, email, password_hash, role, department, status, created_at, last_login, email_verified, mfa_enabled, is_super_admin)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         user.id,
@@ -1098,19 +1393,37 @@ class SqliteItamsDatabase implements ItamsDatabase {
         user.department,
         user.status,
         user.created_at,
-        user.last_login
+        user.last_login,
+        user.email_verified === false ? 0 : 1,
+        user.mfa_enabled ? 1 : 0,
+        user.is_super_admin ? 1 : 0
       );
     return stripPassword(user);
   }
 
   async updateUser(
     id: string,
-    patch: Partial<Pick<StoredUser, 'name' | 'email' | 'role' | 'department' | 'status' | 'password_hash'>>
+    patch: Partial<
+      Pick<
+        StoredUser,
+        | 'name'
+        | 'email'
+        | 'role'
+        | 'department'
+        | 'status'
+        | 'password_hash'
+        | 'email_verified'
+        | 'mfa_enabled'
+        | 'is_super_admin'
+      >
+    >
   ): Promise<User | null> {
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
     if (entries.length > 0) {
       const sets = entries.map(([k]) => `${k} = ?`).join(', ');
-      const values = entries.map(([, v]) => v as string);
+      const values = entries.map(([, v]) =>
+        typeof v === 'boolean' ? (v ? 1 : 0) : (v as string)
+      );
       this.db.prepare(`UPDATE users SET ${sets} WHERE id = ?`).run(...values, id);
     }
     return this.findUserById(id);
@@ -1121,16 +1434,30 @@ class SqliteItamsDatabase implements ItamsDatabase {
     return Number(res.changes) > 0;
   }
 
-  async listEmployees(): Promise<Employee[]> {
-    const employees = this.db
-      .prepare('SELECT * FROM employees ORDER BY full_name ASC')
-      .all() as unknown as Employee[];
-    const rows = this.db
-      .prepare(
-        "SELECT assigned_employee_id AS eid, COUNT(*) AS cnt FROM assets WHERE status = 'Assigned' AND assigned_employee_id IS NOT NULL GROUP BY assigned_employee_id"
-      )
-      .all() as Array<{ eid: string; cnt: number }>;
-    const counts = new Map(rows.map((r) => [r.eid, r.cnt]));
+  async listEmployees(scope?: TenantScopeFilter): Promise<Employee[]> {
+    const employees = (
+      this.db
+        .prepare('SELECT * FROM employees ORDER BY full_name ASC')
+        .all() as unknown as Employee[]
+    ).filter((e) => matchesScope(e, scope));
+    const activeAssigned = (
+      this.db
+        .prepare(
+          "SELECT assigned_employee_id, tenant_id, org_id FROM assets WHERE status = 'Assigned' AND assigned_employee_id IS NOT NULL"
+        )
+        .all() as Array<{
+        assigned_employee_id: string;
+        tenant_id?: string;
+        org_id?: string;
+      }>
+    ).filter((a) => matchesScope(a, scope));
+    const counts = new Map<string, number>();
+    for (const r of activeAssigned) {
+      counts.set(
+        r.assigned_employee_id,
+        (counts.get(r.assigned_employee_id) ?? 0) + 1
+      );
+    }
     return employees.map((e) => ({ ...e, assigned_count: counts.get(e.id) ?? 0 }));
   }
 
@@ -1148,10 +1475,12 @@ class SqliteItamsDatabase implements ItamsDatabase {
   }
 
   async createEmployee(employee: Employee): Promise<Employee> {
+    const tenantId = employee.tenant_id || 'ten-default-01';
+    const orgId = employee.org_id || 'org-default-01';
     this.db
       .prepare(
-        `INSERT INTO employees (id, employee_code, full_name, email, department, job_title, phone, location, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO employees (id, employee_code, full_name, email, department, job_title, phone, location, status, created_at, tenant_id, org_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         employee.id,
@@ -1163,9 +1492,11 @@ class SqliteItamsDatabase implements ItamsDatabase {
         employee.phone,
         employee.location,
         employee.status,
-        employee.created_at
+        employee.created_at,
+        tenantId,
+        orgId
       );
-    return { ...employee, assigned_count: 0 };
+    return { ...employee, tenant_id: tenantId, org_id: orgId, assigned_count: 0 };
   }
 
   async updateEmployee(id: string, patch: Partial<Employee>): Promise<Employee | null> {
@@ -1178,6 +1509,7 @@ class SqliteItamsDatabase implements ItamsDatabase {
       'phone',
       'location',
       'status',
+      'org_id',
     ];
     const entries = Object.entries(patch).filter(
       ([k, v]) => allowed.includes(k) && v !== undefined
@@ -1195,10 +1527,12 @@ class SqliteItamsDatabase implements ItamsDatabase {
     return Number(res.changes) > 0;
   }
 
-  async listAssets(): Promise<Asset[]> {
-    const assets = this.db
-      .prepare('SELECT * FROM assets ORDER BY created_at DESC')
-      .all() as unknown as Asset[];
+  async listAssets(scope?: TenantScopeFilter): Promise<Asset[]> {
+    const assets = (
+      this.db
+        .prepare('SELECT * FROM assets ORDER BY created_at DESC')
+        .all() as unknown as Asset[]
+    ).filter((a) => matchesScope(a, scope));
     const employees = this.db
       .prepare('SELECT * FROM employees')
       .all() as unknown as Employee[];
@@ -1217,10 +1551,12 @@ class SqliteItamsDatabase implements ItamsDatabase {
   }
 
   async createAsset(asset: Asset): Promise<Asset> {
+    const tenantId = asset.tenant_id || 'ten-default-01';
+    const orgId = asset.org_id || 'org-default-01';
     this.db
       .prepare(
-        `INSERT INTO assets (id, asset_tag, name, category, brand, model, serial_number, purchase_date, cost, warranty_expiry, status, assigned_employee_id, assigned_date, location, notes, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO assets (id, asset_tag, name, category, brand, model, serial_number, purchase_date, cost, warranty_expiry, status, assigned_employee_id, assigned_date, location, notes, created_at, updated_at, tenant_id, org_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         asset.id,
@@ -1239,9 +1575,11 @@ class SqliteItamsDatabase implements ItamsDatabase {
         asset.location,
         asset.notes,
         asset.created_at,
-        asset.updated_at
+        asset.updated_at,
+        tenantId,
+        orgId
       );
-    return (await this.getAssetById(asset.id)) ?? asset;
+    return (await this.getAssetById(asset.id)) ?? { ...asset, tenant_id: tenantId, org_id: orgId };
   }
 
   async updateAsset(id: string, patch: Partial<Asset>): Promise<Asset | null> {
@@ -1261,6 +1599,7 @@ class SqliteItamsDatabase implements ItamsDatabase {
       'location',
       'notes',
       'updated_at',
+      'org_id',
     ];
     const entries = Object.entries(patch).filter(
       ([k, v]) => allowed.includes(k) && v !== undefined
@@ -1283,10 +1622,12 @@ class SqliteItamsDatabase implements ItamsDatabase {
     return false;
   }
 
-  async listAssignments(): Promise<AssetAssignment[]> {
-    const assignments = this.db
-      .prepare('SELECT * FROM assignments ORDER BY created_at DESC')
-      .all() as unknown as AssetAssignment[];
+  async listAssignments(scope?: TenantScopeFilter): Promise<AssetAssignment[]> {
+    const assignments = (
+      this.db
+        .prepare('SELECT * FROM assignments ORDER BY created_at DESC')
+        .all() as unknown as AssetAssignment[]
+    ).filter((a) => matchesScope(a, scope));
     const assets = this.db.prepare('SELECT * FROM assets').all() as unknown as Asset[];
     const employees = this.db
       .prepare('SELECT * FROM employees')
@@ -1317,10 +1658,14 @@ class SqliteItamsDatabase implements ItamsDatabase {
     assignedDate: string;
     conditionOut: string;
     notes: string;
+    tenantId?: string;
+    orgId?: string;
   }): Promise<AssetAssignment> {
+    const tenantId = params.tenantId || 'ten-default-01';
+    const orgId = params.orgId || 'org-default-01';
     const existing = this.db
-      .prepare('SELECT handover_number FROM assignments')
-      .all() as unknown as AssetAssignment[];
+      .prepare('SELECT handover_number, tenant_id FROM assignments WHERE tenant_id = ?')
+      .all(tenantId) as unknown as AssetAssignment[];
     const now = new Date().toISOString();
     const record: AssetAssignment = {
       id: `asg-${crypto.randomUUID().slice(0, 8)}`,
@@ -1335,12 +1680,14 @@ class SqliteItamsDatabase implements ItamsDatabase {
       notes: params.notes,
       status: 'Active',
       created_at: now,
+      tenant_id: tenantId,
+      org_id: orgId,
     };
 
     this.db
       .prepare(
-        `INSERT INTO assignments (id, asset_id, employee_id, assigned_by_user_id, assigned_date, returned_date, condition_out, condition_in, handover_number, notes, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO assignments (id, asset_id, employee_id, assigned_by_user_id, assigned_date, returned_date, condition_out, condition_in, handover_number, notes, status, created_at, tenant_id, org_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         record.id,
@@ -1354,7 +1701,9 @@ class SqliteItamsDatabase implements ItamsDatabase {
         record.handover_number,
         record.notes,
         record.status,
-        record.created_at
+        record.created_at,
+        tenantId,
+        orgId
       );
 
     this.db
@@ -1401,10 +1750,12 @@ class SqliteItamsDatabase implements ItamsDatabase {
     return (await this.getAssignmentById(params.assignmentId))!;
   }
 
-  async listMaintenanceLogs(): Promise<MaintenanceLog[]> {
-    const logs = this.db
-      .prepare('SELECT * FROM maintenance_logs ORDER BY service_date DESC, created_at DESC')
-      .all() as unknown as MaintenanceLog[];
+  async listMaintenanceLogs(scope?: TenantScopeFilter): Promise<MaintenanceLog[]> {
+    const logs = (
+      this.db
+        .prepare('SELECT * FROM maintenance_logs ORDER BY service_date DESC, created_at DESC')
+        .all() as unknown as MaintenanceLog[]
+    ).filter((m) => matchesScope(m, scope));
     const assets = this.db.prepare('SELECT * FROM assets').all() as unknown as Asset[];
     const users = this.getAllStoredUsers();
     return enrichMaintenance(logs, assets, users);
@@ -1424,10 +1775,12 @@ class SqliteItamsDatabase implements ItamsDatabase {
     log: MaintenanceLog,
     setAssetUnderMaintenance: boolean
   ): Promise<MaintenanceLog> {
+    const tenantId = log.tenant_id || 'ten-default-01';
+    const orgId = log.org_id || 'org-default-01';
     this.db
       .prepare(
-        `INSERT INTO maintenance_logs (id, asset_id, issue_description, maintenance_type, vendor_or_technician, service_date, next_service_date, cost, status, recorded_by_user_id, notes, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO maintenance_logs (id, asset_id, issue_description, maintenance_type, vendor_or_technician, service_date, next_service_date, cost, status, recorded_by_user_id, notes, created_at, tenant_id, org_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         log.id,
@@ -1441,14 +1794,16 @@ class SqliteItamsDatabase implements ItamsDatabase {
         log.status,
         log.recorded_by_user_id,
         log.notes,
-        log.created_at
+        log.created_at,
+        tenantId,
+        orgId
       );
     if (setAssetUnderMaintenance && log.status !== 'Completed') {
       this.db
         .prepare("UPDATE assets SET status = 'Under Maintenance', updated_at = ? WHERE id = ?")
         .run(new Date().toISOString(), log.asset_id);
     }
-    return (await this.getMaintenanceById(log.id)) ?? log;
+    return (await this.getMaintenanceById(log.id)) ?? { ...log, tenant_id: tenantId, org_id: orgId };
   }
 
   async updateMaintenanceLog(
@@ -1505,10 +1860,13 @@ class SqliteItamsDatabase implements ItamsDatabase {
     return Number(res.changes) > 0;
   }
 
-  async listNotifications(userId: string): Promise<SystemNotification[]> {
+  async listNotifications(
+    userId: string,
+    scope?: TenantScopeFilter
+  ): Promise<SystemNotification[]> {
     const [assets, logs] = await Promise.all([
-      this.listAssets(),
-      this.listMaintenanceLogs(),
+      this.listAssets(scope),
+      this.listMaintenanceLogs(scope),
     ]);
     const acks = this.db
       .prepare('SELECT * FROM notification_acks WHERE user_id = ?')
@@ -1528,15 +1886,50 @@ class SqliteItamsDatabase implements ItamsDatabase {
     }
   }
 
-  async getDashboardSummary(userId: string): Promise<DashboardSummary> {
+  async getDashboardSummary(
+    userId: string,
+    scope?: TenantScopeFilter
+  ): Promise<DashboardSummary> {
     const [assets, employees, assignments, logs, notifications] = await Promise.all([
-      this.listAssets(),
-      this.listEmployees(),
-      this.listAssignments(),
-      this.listMaintenanceLogs(),
-      this.listNotifications(userId),
+      this.listAssets(scope),
+      this.listEmployees(scope),
+      this.listAssignments(scope),
+      this.listMaintenanceLogs(scope),
+      this.listNotifications(userId, scope),
     ]);
     return buildDashboardSummary(assets, employees, assignments, logs, notifications);
+  }
+
+  async resetToCleanState(): Promise<void> {
+    this.db.exec(`
+      DELETE FROM notification_acks;
+      DELETE FROM maintenance_logs;
+      DELETE FROM assignments;
+      DELETE FROM assets;
+      DELETE FROM employees;
+      DELETE FROM users;
+    `);
+    const seed = createSeedData();
+    const insertUser = this.db.prepare(
+      `INSERT INTO users (id, name, email, password_hash, role, department, status, created_at, last_login, email_verified, mfa_enabled, is_super_admin)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const u of seed.users) {
+      insertUser.run(
+        u.id,
+        u.name,
+        u.email,
+        u.password_hash,
+        u.role,
+        u.department,
+        u.status,
+        u.created_at,
+        u.last_login,
+        u.email_verified ? 1 : 0,
+        u.mfa_enabled ? 1 : 0,
+        u.is_super_admin ? 1 : 0
+      );
+    }
   }
 }
 
@@ -1549,9 +1942,13 @@ function normalizeMongoUri(raw?: string): string {
   return trimmed.replace(/^["']|["']$/g, '').trim();
 }
 
-export async function createDatabase(): Promise<ItamsDatabase> {
-  const mongoUri = normalizeMongoUri(process.env.MONGODB_URI);
-  if (mongoUri) {
+export async function createDatabase(
+  sqlitePathOverride?: string
+): Promise<ItamsDatabase> {
+  const mongoUri = sqlitePathOverride
+    ? ''
+    : normalizeMongoUri(process.env.MONGODB_URI);
+  if (mongoUri && !process.env.ITAMS_FORCE_SQLITE) {
     const dbName =
       process.env.MONGODB_DB_NAME?.trim().replace(/^["']|["']$/g, '') ||
       'assetvault_it';
@@ -1569,13 +1966,14 @@ export async function createDatabase(): Promise<ItamsDatabase> {
     }
   }
 
-  if (process.env.VERCEL) {
+  if (process.env.VERCEL && !sqlitePathOverride) {
     throw new Error(
       'MONGODB_URI is required when running on Vercel. Configure MONGODB_URI in Vercel Project Environment Variables and allow 0.0.0.0/0 in MongoDB Atlas Network Access.'
     );
   }
 
-  const sqlitePath = path.resolve(process.cwd(), 'data', 'it_assets.db');
+  const sqlitePath =
+    sqlitePathOverride || path.resolve(process.cwd(), 'data', 'it_assets.db');
   const sqliteDb = new SqliteItamsDatabase(sqlitePath);
   await sqliteDb.init();
   console.log(

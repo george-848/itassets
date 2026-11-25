@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertCircle,
   ArrowUpDown,
+  BarChart3,
   CheckCircle2,
   Clock,
   DollarSign,
@@ -13,7 +14,18 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { api, ApiError } from '../lib/api.ts';
+import { useTheme } from '../lib/theme.tsx';
 import {
   MAINTENANCE_STATUSES,
   MAINTENANCE_TYPES,
@@ -23,6 +35,7 @@ import {
   type MaintenanceType,
   type UserRole,
 } from '../types/itams.ts';
+import type { Ticket } from '../types/saas.ts';
 import { ConfirmDialog } from './ConfirmDialog.tsx';
 import { MaintenanceStatusIndicator, formatCurrencyExact } from './StatusText.tsx';
 import { DataPagination } from './ui/DataPagination.tsx';
@@ -31,6 +44,7 @@ import { EmptyState } from './ui/EmptyState.tsx';
 interface MaintenanceViewProps {
   maintenanceLogs: MaintenanceLog[];
   assets: Asset[];
+  tickets?: Ticket[];
   userRole: UserRole;
   preselectedAsset: Asset | null;
   onClearPreselectedAsset: () => void;
@@ -49,6 +63,8 @@ interface MaintenanceFormState {
   status: MaintenanceStatus;
   notes: string;
   set_asset_under_maintenance: boolean;
+  ticket_id: string;
+  downtime_minutes: string;
 }
 
 type SortField = 'asset_tag' | 'service_date' | 'next_service_date' | 'cost';
@@ -59,12 +75,15 @@ const INPUT_CLASS =
 export function MaintenanceView({
   maintenanceLogs,
   assets,
+  tickets = [],
   userRole,
   preselectedAsset,
   onClearPreselectedAsset,
   onRefresh,
   onToast,
 }: MaintenanceViewProps) {
+  const { theme } = useTheme();
+  const [chartMode, setChartMode] = useState<'category' | 'monthly'>('category');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [typeFilter, setTypeFilter] = useState<string>('ALL');
@@ -86,6 +105,8 @@ export function MaintenanceView({
     status: 'In Progress',
     notes: '',
     set_asset_under_maintenance: true,
+    ticket_id: '',
+    downtime_minutes: '0',
   });
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -106,6 +127,8 @@ export function MaintenanceView({
       status: 'In Progress',
       notes: '',
       set_asset_under_maintenance: true,
+      ticket_id: '',
+      downtime_minutes: '0',
     });
     setFormError(null);
     setFormOpen(true);
@@ -131,6 +154,8 @@ export function MaintenanceView({
       status: log.status,
       notes: log.notes,
       set_asset_under_maintenance: false,
+      ticket_id: log.ticket_id || '',
+      downtime_minutes: String(log.downtime_minutes ?? 0),
     });
     setFormError(null);
     setFormOpen(true);
@@ -151,6 +176,116 @@ export function MaintenanceView({
     ).length;
     return { totalCost, openCount, overdueCount, completedCount };
   }, [maintenanceLogs, todayStr]);
+
+  const sixMonthAnalytics = useMemo(() => {
+    const categoryColors: Record<string, string> = {
+      Laptops: '#3B66F6',
+      Desktops: '#6366F1',
+      Servers: '#1AB394',
+      'Networking Equipment': '#0EA5E9',
+      Printers: '#F59E0B',
+      UPS: '#8B5CF6',
+      Monitors: '#10B981',
+      CCTV: '#EC4899',
+      Accessories: '#64748B',
+    };
+
+    const now = new Date();
+    const monthSlots: Array<{ key: string; label: string; fullLabel: string }> = [];
+    for (let offset = 5; offset >= 0; offset--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = d.toLocaleDateString('en-US', {
+        month: 'short',
+        year: '2-digit',
+      });
+      const fullLabel = d.toLocaleDateString('en-US', {
+        month: 'short',
+        year: 'numeric',
+      });
+      monthSlots.push({ key, label, fullLabel });
+    }
+
+    const monthKeySet = new Set(monthSlots.map((m) => m.key));
+    const assetCategoryMap = new Map<string, string>();
+    for (const asset of assets) {
+      assetCategoryMap.set(asset.id, asset.category);
+    }
+
+    const categoryTotals = new Map<
+      string,
+      { category: string; cost: number; tickets: number; color: string }
+    >();
+    const monthlyMap = new Map<string, Record<string, number | string>>();
+    for (const slot of monthSlots) {
+      monthlyMap.set(slot.key, {
+        monthKey: slot.key,
+        month: slot.label,
+      });
+    }
+
+    let sixMonthCost = 0;
+    let sixMonthTickets = 0;
+
+    for (const log of maintenanceLogs) {
+      const monthKey = (log.service_date || '').slice(0, 7);
+      if (!monthKeySet.has(monthKey)) continue;
+
+      const category =
+        log.asset_category ||
+        assetCategoryMap.get(log.asset_id) ||
+        'Other';
+      const cost = Number(log.cost || 0);
+
+      sixMonthCost += cost;
+      sixMonthTickets += 1;
+
+      const existingCat = categoryTotals.get(category) ?? {
+        category,
+        cost: 0,
+        tickets: 0,
+        color: categoryColors[category] || '#3B66F6',
+      };
+      existingCat.cost += cost;
+      existingCat.tickets += 1;
+      categoryTotals.set(category, existingCat);
+
+      const monthRow = monthlyMap.get(monthKey);
+      if (monthRow) {
+        monthRow[category] = Number(monthRow[category] || 0) + cost;
+      }
+    }
+
+    const byCategory = Array.from(categoryTotals.values()).sort(
+      (a, b) => b.cost - a.cost || b.tickets - a.tickets
+    );
+    const activeCategories = byCategory.map((c) => ({
+      category: c.category,
+      color: c.color,
+      cost: c.cost,
+    }));
+
+    const monthlyTrend = monthSlots.map((slot) => {
+      const row = monthlyMap.get(slot.key) || { month: slot.label };
+      for (const cat of activeCategories) {
+        if (row[cat.category] === undefined) {
+          row[cat.category] = 0;
+        }
+      }
+      return row;
+    });
+
+    const rangeLabel = `${monthSlots[0].fullLabel} – ${monthSlots[monthSlots.length - 1].fullLabel}`;
+
+    return {
+      byCategory,
+      activeCategories,
+      monthlyTrend,
+      sixMonthCost,
+      sixMonthTickets,
+      rangeLabel,
+    };
+  }, [maintenanceLogs, assets]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -220,6 +355,7 @@ export function MaintenanceView({
       return;
     }
 
+    const downtimeMinutes = Math.max(0, Number(form.downtime_minutes || 0));
     setSubmitting(true);
     try {
       if (editingLog) {
@@ -232,6 +368,8 @@ export function MaintenanceView({
           cost: parsedCost,
           status: form.status,
           notes: form.notes,
+          ticket_id: form.ticket_id || null,
+          downtime_minutes: downtimeMinutes,
         });
         onToast('success', 'Maintenance ticket updated.');
       } else {
@@ -246,6 +384,8 @@ export function MaintenanceView({
           status: form.status,
           notes: form.notes,
           set_asset_under_maintenance: form.set_asset_under_maintenance,
+          ticket_id: form.ticket_id || null,
+          downtime_minutes: downtimeMinutes,
         });
         onToast('success', 'Maintenance record logged.');
       }
@@ -383,6 +523,298 @@ export function MaintenanceView({
           </p>
         </motion.div>
       </div>
+
+      {/* 6-Month Maintenance Cost per Asset Category Bar Chart */}
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.18, delay: 0.12 }}
+        className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-5 shadow-[var(--av-card-shadow)]"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[var(--av-border-subtle)] pb-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 dark:bg-blue-500/15 text-[#3B66F6] dark:text-blue-400">
+              <BarChart3 className="h-4.5 w-4.5" />
+            </div>
+            <div>
+              <h2 className="font-display text-base font-semibold text-[var(--av-text)]">
+                Maintenance Cost by Asset Category
+              </h2>
+              <p className="text-xs text-[var(--av-text-subtle)] mt-0.5 tabular-nums">
+                Last 6 months ({sixMonthAnalytics.rangeLabel}) ·{' '}
+                {formatCurrencyExact(sixMonthAnalytics.sixMonthCost)} across{' '}
+                {sixMonthAnalytics.sixMonthTickets}{' '}
+                {sixMonthAnalytics.sixMonthTickets === 1 ? 'ticket' : 'tickets'}
+              </p>
+            </div>
+          </div>
+
+          <div
+            className="inline-flex items-center rounded-lg border border-[var(--av-border)] bg-[var(--av-surface-muted)] p-0.5 self-start sm:self-auto shrink-0"
+            role="tablist"
+            aria-label="Chart breakdown view"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={chartMode === 'category'}
+              onClick={() => setChartMode('category')}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                chartMode === 'category'
+                  ? 'bg-[var(--av-surface)] text-[var(--av-text)] shadow-xs'
+                  : 'text-[var(--av-text-subtle)] hover:text-[var(--av-text)]'
+              }`}
+            >
+              By Category
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={chartMode === 'monthly'}
+              onClick={() => setChartMode('monthly')}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                chartMode === 'monthly'
+                  ? 'bg-[var(--av-surface)] text-[var(--av-text)] shadow-xs'
+                  : 'text-[var(--av-text-subtle)] hover:text-[var(--av-text)]'
+              }`}
+            >
+              Monthly Trend
+            </button>
+          </div>
+        </div>
+
+        {sixMonthAnalytics.sixMonthTickets === 0 ? (
+          <div className="h-64 flex flex-col items-center justify-center text-center px-4">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-blue-200/70 dark:border-blue-500/25 bg-blue-50/70 dark:bg-blue-500/10 text-[#3B66F6] dark:text-blue-400">
+              <BarChart3 className="h-5 w-5" />
+            </div>
+            <p className="mt-3 text-sm font-semibold text-[var(--av-text)]">
+              No maintenance costs logged in the last 6 months
+            </p>
+            <p className="mt-1 text-xs text-[var(--av-text-subtle)] max-w-md">
+              Log service tickets within {sixMonthAnalytics.rangeLabel} to compare
+              maintenance spend across hardware categories.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="mt-4 h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                {chartMode === 'category' ? (
+                  <BarChart
+                    data={sixMonthAnalytics.byCategory}
+                    margin={{ top: 10, right: 12, left: 4, bottom: 18 }}
+                    barSize={38}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke={theme.gridStroke}
+                      vertical={false}
+                    />
+                    <XAxis
+                      dataKey="category"
+                      tick={{ fontSize: 11, fill: theme.tickColor }}
+                      axisLine={false}
+                      tickLine={false}
+                      interval={0}
+                      angle={
+                        sixMonthAnalytics.byCategory.length > 5 ? -14 : 0
+                      }
+                      textAnchor={
+                        sixMonthAnalytics.byCategory.length > 5 ? 'end' : 'middle'
+                      }
+                      height={sixMonthAnalytics.byCategory.length > 5 ? 46 : 30}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: theme.tickColor }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(v) =>
+                        Number(v) >= 1000
+                          ? `$${(Number(v) / 1000).toFixed(1).replace(/\.0$/, '')}k`
+                          : `$${v}`
+                      }
+                    />
+                    <Tooltip
+                      cursor={{
+                        fill: theme.isDark
+                          ? 'rgba(255, 255, 255, 0.04)'
+                          : 'rgba(15, 23, 42, 0.04)',
+                      }}
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload || payload.length === 0) {
+                          return null;
+                        }
+                        const row = payload[0].payload as {
+                          cost: number;
+                          tickets: number;
+                          color: string;
+                        };
+                        return (
+                          <div className="rounded-xl border border-white/10 bg-[#080D21]/95 px-3 py-2 text-xs text-white shadow-xl backdrop-blur-md">
+                            <div className="mb-1.5 flex items-center gap-2 font-display font-semibold text-slate-200 border-b border-white/10 pb-1">
+                              <span
+                                className="h-2.5 w-2.5 rounded-xs shrink-0"
+                                style={{ backgroundColor: row.color }}
+                              />
+                              <span>{label}</span>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between gap-5">
+                                <span className="text-slate-300">6-Mo Spend</span>
+                                <span className="font-mono font-semibold text-white tabular-nums">
+                                  {formatCurrencyExact(row.cost)}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between gap-5">
+                                <span className="text-slate-300">Tickets</span>
+                                <span className="font-mono font-semibold text-slate-200 tabular-nums">
+                                  {row.tickets}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Bar
+                      dataKey="cost"
+                      name="Maintenance Cost"
+                      radius={[6, 6, 0, 0]}
+                    >
+                      {sixMonthAnalytics.byCategory.map((entry) => (
+                        <Cell key={entry.category} fill={entry.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                ) : (
+                  <BarChart
+                    data={sixMonthAnalytics.monthlyTrend}
+                    margin={{ top: 10, right: 12, left: 4, bottom: 8 }}
+                    barSize={34}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke={theme.gridStroke}
+                      vertical={false}
+                    />
+                    <XAxis
+                      dataKey="month"
+                      tick={{ fontSize: 11, fill: theme.tickColor }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: theme.tickColor }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(v) =>
+                        Number(v) >= 1000
+                          ? `$${(Number(v) / 1000).toFixed(1).replace(/\.0$/, '')}k`
+                          : `$${v}`
+                      }
+                    />
+                    <Tooltip
+                      cursor={{
+                        fill: theme.isDark
+                          ? 'rgba(255, 255, 255, 0.04)'
+                          : 'rgba(15, 23, 42, 0.04)',
+                      }}
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload || payload.length === 0) {
+                          return null;
+                        }
+                        const nonZero = payload.filter(
+                          (entry) => Number(entry.value || 0) > 0
+                        );
+                        const monthTotal = payload.reduce(
+                          (sum, entry) => sum + Number(entry.value || 0),
+                          0
+                        );
+                        return (
+                          <div className="rounded-xl border border-white/10 bg-[#080D21]/95 px-3 py-2 text-xs text-white shadow-xl backdrop-blur-md">
+                            <div className="mb-1.5 flex items-center justify-between gap-4 font-display font-semibold text-slate-200 border-b border-white/10 pb-1">
+                              <span>{label}</span>
+                              <span className="font-mono tabular-nums">
+                                {formatCurrencyExact(monthTotal)}
+                              </span>
+                            </div>
+                            {nonZero.length === 0 ? (
+                              <div className="text-slate-400">
+                                No maintenance cost recorded
+                              </div>
+                            ) : (
+                              <div className="space-y-1">
+                                {nonZero.map((entry, idx) => (
+                                  <div
+                                    key={idx}
+                                    className="flex items-center justify-between gap-4"
+                                  >
+                                    <span className="flex items-center gap-1.5 text-slate-300">
+                                      <span
+                                        className="h-2 w-2 rounded-xs shrink-0"
+                                        style={{
+                                          backgroundColor:
+                                            entry.color || '#3B66F6',
+                                        }}
+                                      />
+                                      <span>{entry.name}</span>
+                                    </span>
+                                    <span className="font-mono font-semibold text-white tabular-nums">
+                                      {formatCurrencyExact(
+                                        Number(entry.value || 0)
+                                      )}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }}
+                    />
+                    {sixMonthAnalytics.activeCategories.map((cat, idx) => (
+                      <Bar
+                        key={cat.category}
+                        dataKey={cat.category}
+                        name={cat.category}
+                        stackId="maintCost"
+                        fill={cat.color}
+                        radius={
+                          idx === sixMonthAnalytics.activeCategories.length - 1
+                            ? [5, 5, 0, 0]
+                            : [0, 0, 0, 0]
+                        }
+                      />
+                    ))}
+                  </BarChart>
+                )}
+              </ResponsiveContainer>
+            </div>
+
+            {/* Category Color Legend */}
+            <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-[var(--av-border-subtle)] pt-3 text-xs">
+              {sixMonthAnalytics.byCategory.map((cat) => (
+                <div
+                  key={cat.category}
+                  className="inline-flex items-center gap-1.5 text-[var(--av-text-muted)]"
+                >
+                  <span
+                    className="h-2.5 w-2.5 rounded-xs shrink-0"
+                    style={{ backgroundColor: cat.color }}
+                  />
+                  <span className="font-medium text-[var(--av-text)]">
+                    {cat.category}
+                  </span>
+                  <span className="font-mono text-[11px] text-[var(--av-text-subtle)] tabular-nums">
+                    {formatCurrencyExact(cat.cost)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </motion.div>
 
       {/* Toolbar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-4 shadow-[var(--av-card-shadow)]">
@@ -534,6 +966,11 @@ export function MaintenanceView({
                       <td className="py-3 px-4 max-w-xs">
                         <div className="text-xs font-semibold text-[var(--av-text)]">
                           {m.maintenance_type}
+                          {m.downtime_minutes ? (
+                            <span className="ml-1.5 font-mono text-[11px] font-normal text-[var(--av-text-subtle)] tabular-nums">
+                              · {m.downtime_minutes}m downtime
+                            </span>
+                          ) : null}
                         </div>
                         <div className="text-xs text-[var(--av-text-muted)] truncate">
                           {m.issue_description}
@@ -838,20 +1275,59 @@ export function MaintenanceView({
                   </label>
                 )}
 
-                <div>
-                  <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
-                    Notes
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={form.notes}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, notes: e.target.value }))
-                    }
-                    placeholder="Diagnostic findings or parts replaced..."
-                    className={INPUT_CLASS}
-                  />
-                </div>
+                  <div>
+                    <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
+                      Notes
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={form.notes}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, notes: e.target.value }))
+                      }
+                      placeholder="Diagnostic findings or parts replaced..."
+                      className={INPUT_CLASS}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
+                        Linked Helpdesk Ticket (optional)
+                      </label>
+                      <select
+                        value={form.ticket_id}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, ticket_id: e.target.value }))
+                        }
+                        className={INPUT_CLASS}
+                      >
+                        <option value="">None</option>
+                        {tickets.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.ticketNumber} · {t.subject}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
+                        Asset Downtime (minutes)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={form.downtime_minutes}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            downtime_minutes: e.target.value,
+                          }))
+                        }
+                        className={`${INPUT_CLASS} font-mono tabular-nums`}
+                      />
+                    </div>
+                  </div>
 
                 <div className="flex items-center justify-end gap-2.5 border-t border-[var(--av-border-subtle)] pt-4">
                   <button

@@ -1,4 +1,5 @@
 import { hashPassword } from './auth.ts';
+import { BOOTSTRAP_SUPER_ADMIN_EMAIL } from './rbac.ts';
 import type {
   Asset,
   AssetAssignment,
@@ -19,8 +20,10 @@ export function createSeedData(): {
   maintenanceLogs: MaintenanceLog[];
 } {
   const now = new Date().toISOString();
+  const superAdminInitialPass =
+    process.env.SUPER_ADMIN_INITIAL_PASSWORD?.trim() || 'SuperAdmin@2026!';
 
-  // Bootstrap primary administrator account only; all operational tables start empty
+  // Bootstrap primary administrator + platform Super Admin account; operational tables start empty
   const users: StoredUser[] = [
     {
       id: 'usr-admin-01',
@@ -32,6 +35,23 @@ export function createSeedData(): {
       status: 'active',
       created_at: now,
       last_login: null,
+      email_verified: true,
+      mfa_enabled: false,
+      is_super_admin: false,
+    },
+    {
+      id: 'usr-superadmin-01',
+      name: 'Platform Super Admin',
+      email: BOOTSTRAP_SUPER_ADMIN_EMAIL,
+      password_hash: hashPassword(superAdminInitialPass),
+      role: 'admin',
+      department: 'Platform Governance',
+      status: 'active',
+      created_at: now,
+      last_login: null,
+      email_verified: true,
+      mfa_enabled: false,
+      is_super_admin: true,
     },
   ];
 

@@ -1,0 +1,42 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isVerified() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isValidUpload() {
+      return request.resource.size <= 10 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/.*|application/pdf|text/csv|application/vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.sheet');
+    }
+
+    function hasOrgMembership(tenantId, orgId) {
+      return isVerified() &&
+        firestore.exists(/databases/(default)/documents/userMemberships/$(request.auth.uid + '_' + tenantId)) &&
+        firestore.get(/databases/(default)/documents/userMemberships/$(request.auth.uid + '_' + tenantId)).data.status == 'active' &&
+        (
+          firestore.get(/databases/(default)/documents/userMemberships/$(request.auth.uid + '_' + tenantId)).data.orgAccessMode == 'all' ||
+          firestore.get(/databases/(default)/documents/userMemberships/$(request.auth.uid + '_' + tenantId)).data.allowedOrgIds.hasAny([orgId])
+        );
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    match /tenants/{tenantId}/organisations/{orgId}/assets/{assetId}/{fileName} {
+      allow read: if hasOrgMembership(tenantId, orgId);
+      allow write: if hasOrgMembership(tenantId, orgId) && isValidUpload();
+    }
+
+    match /tenants/{tenantId}/organisations/{orgId}/tickets/{ticketId}/{fileName} {
+      allow read: if hasOrgMembership(tenantId, orgId);
+      allow write: if hasOrgMembership(tenantId, orgId) && isValidUpload();
+    }
+
+    match /tenants/{tenantId}/organisations/{orgId}/documents/{fileName} {
+      allow read: if hasOrgMembership(tenantId, orgId);
+      allow write: if hasOrgMembership(tenantId, orgId) && isValidUpload();
+    }
+  }
+}

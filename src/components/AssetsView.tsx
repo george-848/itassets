@@ -1,19 +1,28 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
+  Archive,
+  ArrowRightLeft,
   ArrowUpDown,
+  Download,
   Eye,
+  FileSpreadsheet,
+  FileText,
   HardDrive,
   Loader2,
   Pencil,
   Plus,
+  Printer,
+  QrCode,
+  ScanLine,
   Search,
   Trash2,
   UserPlus,
   Wrench,
   X,
 } from 'lucide-react';
-import { api, ApiError } from '../lib/api.ts';
+import { api, ApiError, type ExtendedTenantContext } from '../lib/api.ts';
+import { generateAssetMaintenanceSummaryPDF } from '../lib/exports.ts';
 import {
   ASSET_CATEGORIES,
   ASSET_STATUSES,
@@ -24,6 +33,17 @@ import {
   type MaintenanceLog,
   type UserRole,
 } from '../types/itams.ts';
+import type { AssetTransfer, Ticket } from '../types/saas.ts';
+import {
+  AssetLabelModal,
+  AssetLookupModal,
+  BulkImportAssetsModal,
+  DisposeAssetModal,
+  TransferAssetModal,
+  computeAssetBookValue,
+} from './AssetLabelsAndModals.tsx';
+import { AssetMaintenanceReportModal } from './AssetMaintenanceReportModal.tsx';
+import { AssetTimeline, buildAssetTimelineEvents } from './AssetTimeline.tsx';
 import { ConfirmDialog } from './ConfirmDialog.tsx';
 import {
   AssetStatusIndicator,
@@ -36,12 +56,14 @@ import { EmptyState } from './ui/EmptyState.tsx';
 interface AssetsViewProps {
   assets: Asset[];
   userRole: UserRole;
+  tenantCtx?: ExtendedTenantContext | null;
   selectedAssetId: string | null;
   onClearSelectedAsset: () => void;
   onRefresh: () => Promise<void>;
   onToast: (type: 'success' | 'error', message: string) => void;
   onRequestAssign: (asset: Asset) => void;
   onRequestMaintenance: (asset: Asset) => void;
+  onPlanBlocked?: (err: ApiError) => void;
 }
 
 interface AssetFormState {
@@ -57,6 +79,16 @@ interface AssetFormState {
   status: AssetStatus;
   location: string;
   notes: string;
+  cpu: string;
+  ram: string;
+  storage: string;
+  os: string;
+  hostname: string;
+  ip_address: string;
+  mac_address: string;
+  depreciation_method: 'straight_line' | 'declining_balance' | 'none';
+  useful_life_years: string;
+  salvage_value: string;
 }
 
 const EMPTY_FORM: AssetFormState = {
@@ -72,22 +104,44 @@ const EMPTY_FORM: AssetFormState = {
   status: 'Available',
   location: 'IT Vault',
   notes: '',
+  cpu: '',
+  ram: '',
+  storage: '',
+  os: '',
+  hostname: '',
+  ip_address: '',
+  mac_address: '',
+  depreciation_method: 'straight_line',
+  useful_life_years: '4',
+  salvage_value: '0',
 };
 
 type SortField = 'asset_tag' | 'name' | 'purchase_date' | 'cost' | 'warranty_expiry';
+type DetailTab = 'overview' | 'timeline' | 'assignments' | 'maintenance' | 'lifecycle';
 
 const INPUT_CLASS =
   'w-full rounded-lg border border-[var(--av-border)] bg-[var(--av-surface-muted)] px-3 py-2 text-sm text-[var(--av-text)] placeholder:text-[var(--av-text-subtle)] transition-all focus:bg-[var(--av-surface)] focus:border-[var(--av-accent)] focus:outline-none focus:ring-3 focus:ring-[var(--av-accent-soft)]';
 
+function isPlanBlockedError(err: unknown): err is ApiError {
+  return (
+    err instanceof ApiError &&
+    (err.code === 'QUOTA_EXCEEDED' ||
+      err.code === 'FEATURE_LOCKED' ||
+      err.code === 'SUBSCRIPTION_READ_ONLY')
+  );
+}
+
 export function AssetsView({
   assets,
   userRole,
+  tenantCtx,
   selectedAssetId,
   onClearSelectedAsset,
   onRefresh,
   onToast,
   onRequestAssign,
   onRequestMaintenance,
+  onPlanBlocked,
 }: AssetsViewProps) {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
@@ -105,12 +159,32 @@ export function AssetsView({
   const [submitting, setSubmitting] = useState(false);
 
   const [detailAsset, setDetailAsset] = useState<Asset | null>(null);
+  const [detailTab, setDetailTab] = useState<DetailTab>('overview');
   const [detailAssignments, setDetailAssignments] = useState<AssetAssignment[]>([]);
   const [detailMaintenance, setDetailMaintenance] = useState<MaintenanceLog[]>([]);
+  const [detailTickets, setDetailTickets] = useState<Ticket[]>([]);
+  const [detailTransfers, setDetailTransfers] = useState<AssetTransfer[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  const [labelAsset, setLabelAsset] = useState<Asset | null>(null);
+  const [lookupOpen, setLookupOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [transferAsset, setTransferAsset] = useState<Asset | null>(null);
+  const [disposeAsset, setDisposeAsset] = useState<Asset | null>(null);
+  const [maintReportOpen, setMaintReportOpen] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<Asset | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  const perms = tenantCtx?.permissions;
+  const canCreate = perms ? perms.includes('assets.create') : true;
+  const canUpdate = perms ? perms.includes('assets.update') : true;
+  const canDelete = perms ? perms.includes('assets.delete') : userRole === 'admin';
+  const canImport = perms ? perms.includes('assets.import') : true;
+  const canTransfer = perms ? perms.includes('assets.transfer') : true;
+  const canDispose = perms ? perms.includes('assets.dispose') : userRole === 'admin';
+  const canAssign = perms ? perms.includes('assignments.manage') : true;
+  const canMaint = perms ? perms.includes('maintenance.manage') : true;
 
   useEffect(() => {
     if (selectedAssetId) {
@@ -120,7 +194,9 @@ export function AssetsView({
   }, [selectedAssetId]);
 
   const openDetail = async (assetId: string) => {
+    setMaintReportOpen(false);
     setDetailLoading(true);
+    setDetailTab('overview');
     const localMatch = assets.find((a) => a.id === assetId) ?? null;
     setDetailAsset(localMatch);
     try {
@@ -128,6 +204,8 @@ export function AssetsView({
       setDetailAsset(res.asset);
       setDetailAssignments(res.assignments);
       setDetailMaintenance(res.maintenanceLogs);
+      setDetailTickets(res.tickets ?? []);
+      setDetailTransfers(res.transfers ?? []);
     } catch (err) {
       onToast(
         'error',
@@ -168,6 +246,16 @@ export function AssetsView({
       status: asset.status,
       location: asset.location,
       notes: asset.notes,
+      cpu: asset.specs?.cpu || '',
+      ram: asset.specs?.ram || '',
+      storage: asset.specs?.storage || '',
+      os: asset.specs?.os || '',
+      hostname: asset.specs?.hostname || '',
+      ip_address: asset.specs?.ip_address || '',
+      mac_address: asset.specs?.mac_address || '',
+      depreciation_method: asset.depreciation_method || 'straight_line',
+      useful_life_years: String(asset.useful_life_years ?? 4),
+      salvage_value: String(asset.salvage_value ?? 0),
     });
     setFormStep(1);
     setFormError(null);
@@ -262,9 +350,32 @@ export function AssetsView({
 
     setSubmitting(true);
     try {
-      const payload = {
-        ...form,
+      const specs = {
+        ...(form.cpu.trim() ? { cpu: form.cpu.trim() } : {}),
+        ...(form.ram.trim() ? { ram: form.ram.trim() } : {}),
+        ...(form.storage.trim() ? { storage: form.storage.trim() } : {}),
+        ...(form.os.trim() ? { os: form.os.trim() } : {}),
+        ...(form.hostname.trim() ? { hostname: form.hostname.trim() } : {}),
+        ...(form.ip_address.trim() ? { ip_address: form.ip_address.trim() } : {}),
+        ...(form.mac_address.trim() ? { mac_address: form.mac_address.trim() } : {}),
+      };
+      const payload: Partial<Asset> = {
+        asset_tag: form.asset_tag,
+        name: form.name,
+        category: form.category,
+        brand: form.brand,
+        model: form.model,
+        serial_number: form.serial_number,
+        purchase_date: form.purchase_date,
         cost: parsedCost,
+        warranty_expiry: form.warranty_expiry,
+        status: form.status,
+        location: form.location,
+        notes: form.notes,
+        specs: Object.keys(specs).length > 0 ? specs : undefined,
+        depreciation_method: form.depreciation_method,
+        useful_life_years: Math.max(1, Number(form.useful_life_years) || 4),
+        salvage_value: Math.max(0, Number(form.salvage_value) || 0),
       };
       if (editingAsset) {
         await api.updateAsset(editingAsset.id, payload);
@@ -279,6 +390,11 @@ export function AssetsView({
         await openDetail(editingAsset.id);
       }
     } catch (err) {
+      if (isPlanBlockedError(err) && onPlanBlocked) {
+        setFormOpen(false);
+        onPlanBlocked(err);
+        return;
+      }
       setFormError(err instanceof ApiError ? err.message : 'Failed to save asset.');
     } finally {
       setSubmitting(false);
@@ -297,6 +413,11 @@ export function AssetsView({
       setDeleteTarget(null);
       await onRefresh();
     } catch (err) {
+      if (isPlanBlockedError(err) && onPlanBlocked) {
+        setDeleteTarget(null);
+        onPlanBlocked(err);
+        return;
+      }
       onToast(
         'error',
         err instanceof ApiError ? err.message : 'Failed to delete asset.'
@@ -353,19 +474,39 @@ export function AssetsView({
           </select>
         </div>
 
-        <div className="flex items-center justify-between lg:justify-end gap-3">
-          <span className="text-xs font-medium text-[var(--av-text-subtle)] tabular-nums whitespace-nowrap">
+        <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2">
+          <span className="text-xs font-medium text-[var(--av-text-subtle)] tabular-nums whitespace-nowrap mr-1">
             {filteredAssets.length} of {assets.length} assets
           </span>
-          <motion.button
+          <button
             type="button"
-            whileTap={{ scale: 0.985 }}
-            onClick={openCreateModal}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap shrink-0"
+            onClick={() => setLookupOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap shrink-0"
           >
-            <Plus className="h-4 w-4" />
-            <span>Add Asset</span>
-          </motion.button>
+            <ScanLine className="h-3.5 w-3.5 text-sky-500" />
+            <span>Scan / Lookup</span>
+          </button>
+          {canImport && (
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap shrink-0"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-500" />
+              <span>Bulk Import</span>
+            </button>
+          )}
+          {canCreate && (
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.985 }}
+              onClick={openCreateModal}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap shrink-0"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Add Asset</span>
+            </motion.button>
+          )}
         </div>
       </div>
 
@@ -509,7 +650,15 @@ export function AssetsView({
                           >
                             <Eye className="h-4 w-4" />
                           </button>
-                          {asset.status === 'Available' && (
+                          <button
+                            type="button"
+                            onClick={() => setLabelAsset(asset)}
+                            title="QR & Barcode label"
+                            className="p-1.5 rounded-md text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-500/15 transition-colors"
+                          >
+                            <QrCode className="h-4 w-4" />
+                          </button>
+                          {canAssign && asset.status === 'Available' && (
                             <button
                               type="button"
                               onClick={() => onRequestAssign(asset)}
@@ -519,23 +668,27 @@ export function AssetsView({
                               <UserPlus className="h-4 w-4" />
                             </button>
                           )}
-                          <button
-                            type="button"
-                            onClick={() => onRequestMaintenance(asset)}
-                            title="Log maintenance"
-                            className="p-1.5 rounded-md text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-500/15 transition-colors"
-                          >
-                            <Wrench className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(asset)}
-                            title="Edit asset"
-                            className="p-1.5 rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/15 transition-colors"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                          {userRole === 'admin' && (
+                          {canMaint && (
+                            <button
+                              type="button"
+                              onClick={() => onRequestMaintenance(asset)}
+                              title="Log maintenance"
+                              className="p-1.5 rounded-md text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-500/15 transition-colors"
+                            >
+                              <Wrench className="h-4 w-4" />
+                            </button>
+                          )}
+                          {canUpdate && (
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(asset)}
+                              title="Edit asset"
+                              className="p-1.5 rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/15 transition-colors"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                          )}
+                          {canDelete && (
                             <button
                               type="button"
                               onClick={() => setDeleteTarget(asset)}
@@ -854,6 +1007,131 @@ export function AssetsView({
                       </div>
                     </div>
 
+                    {/* Depreciation Config */}
+                    <div className="rounded-xl border border-[var(--av-border-subtle)] bg-[var(--av-surface-muted)]/50 p-3.5 space-y-3">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--av-text-subtle)]">
+                        Depreciation &amp; Book Value Policy
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1">
+                            Method
+                          </label>
+                          <select
+                            value={form.depreciation_method}
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                depreciation_method: e.target
+                                  .value as AssetFormState['depreciation_method'],
+                              }))
+                            }
+                            className={INPUT_CLASS}
+                          >
+                            <option value="straight_line">Straight Line</option>
+                            <option value="declining_balance">Declining Balance</option>
+                            <option value="none">No Depreciation</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1">
+                            Useful Life (Years)
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="25"
+                            value={form.useful_life_years}
+                            onChange={(e) =>
+                              setForm((f) => ({ ...f, useful_life_years: e.target.value }))
+                            }
+                            className={`${INPUT_CLASS} font-mono tabular-nums`}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1">
+                            Salvage Value
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={form.salvage_value}
+                            onChange={(e) =>
+                              setForm((f) => ({ ...f, salvage_value: e.target.value }))
+                            }
+                            className={`${INPUT_CLASS} font-mono tabular-nums`}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Extended Hardware / Network Specs */}
+                    <div className="rounded-xl border border-[var(--av-border-subtle)] bg-[var(--av-surface-muted)]/50 p-3.5 space-y-3">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--av-text-subtle)]">
+                        Hardware &amp; Network Profile (Optional)
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <input
+                          type="text"
+                          value={form.cpu}
+                          onChange={(e) => setForm((f) => ({ ...f, cpu: e.target.value }))}
+                          placeholder="CPU (e.g. M3 Pro / i7)"
+                          className={INPUT_CLASS}
+                        />
+                        <input
+                          type="text"
+                          value={form.ram}
+                          onChange={(e) => setForm((f) => ({ ...f, ram: e.target.value }))}
+                          placeholder="RAM (e.g. 32 GB)"
+                          className={INPUT_CLASS}
+                        />
+                        <input
+                          type="text"
+                          value={form.storage}
+                          onChange={(e) =>
+                            setForm((f) => ({ ...f, storage: e.target.value }))
+                          }
+                          placeholder="Storage (e.g. 1 TB NVMe)"
+                          className={INPUT_CLASS}
+                        />
+                        <input
+                          type="text"
+                          value={form.os}
+                          onChange={(e) => setForm((f) => ({ ...f, os: e.target.value }))}
+                          placeholder="OS (e.g. macOS 15 / Win 11)"
+                          className={INPUT_CLASS}
+                        />
+                        <input
+                          type="text"
+                          value={form.hostname}
+                          onChange={(e) =>
+                            setForm((f) => ({ ...f, hostname: e.target.value }))
+                          }
+                          placeholder="Hostname"
+                          className={`${INPUT_CLASS} font-mono`}
+                        />
+                        <input
+                          type="text"
+                          value={form.ip_address}
+                          onChange={(e) =>
+                            setForm((f) => ({ ...f, ip_address: e.target.value }))
+                          }
+                          placeholder="IP Address"
+                          className={`${INPUT_CLASS} font-mono`}
+                        />
+                      </div>
+                      <input
+                        type="text"
+                        value={form.mac_address}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, mac_address: e.target.value }))
+                        }
+                        placeholder="MAC Address (optional)"
+                        className={`${INPUT_CLASS} font-mono`}
+                      />
+                    </div>
+
                     <div>
                       <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
                         Specifications & Notes
@@ -969,10 +1247,10 @@ export function AssetsView({
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              <div className="flex-1 overflow-y-auto p-6 space-y-5">
                 {/* Quick Action Bar */}
                 <div className="flex flex-wrap items-center gap-2">
-                  {detailAsset.status === 'Available' && (
+                  {canAssign && detailAsset.status === 'Available' && (
                     <button
                       type="button"
                       onClick={() => onRequestAssign(detailAsset)}
@@ -984,191 +1262,528 @@ export function AssetsView({
                   )}
                   <button
                     type="button"
-                    onClick={() => onRequestMaintenance(detailAsset)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3.5 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                    onClick={() => setLabelAsset(detailAsset)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
                   >
-                    <Wrench className="h-3.5 w-3.5" />
-                    <span>Log Maintenance</span>
+                    <QrCode className="h-3.5 w-3.5 text-teal-500" />
+                    <span>QR Label</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => openEditModal(detailAsset)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3.5 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                    disabled={detailLoading}
+                    onClick={() => setMaintReportOpen(true)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] disabled:opacity-50 transition-colors"
                   >
-                    <Pencil className="h-3.5 w-3.5" />
-                    <span>Edit Details</span>
+                    <FileText className="h-3.5 w-3.5 text-[var(--av-accent)]" />
+                    <span>Maint. Report</span>
                   </button>
+                  {canMaint && (
+                    <button
+                      type="button"
+                      onClick={() => onRequestMaintenance(detailAsset)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                    >
+                      <Wrench className="h-3.5 w-3.5 text-amber-500" />
+                      <span>Maintenance</span>
+                    </button>
+                  )}
+                  {canTransfer && (
+                    <button
+                      type="button"
+                      onClick={() => setTransferAsset(detailAsset)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                    >
+                      <ArrowRightLeft className="h-3.5 w-3.5 text-blue-500" />
+                      <span>Transfer</span>
+                    </button>
+                  )}
+                  {canUpdate && (
+                    <button
+                      type="button"
+                      onClick={() => openEditModal(detailAsset)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                    >
+                      <Pencil className="h-3.5 w-3.5 text-indigo-500" />
+                      <span>Edit</span>
+                    </button>
+                  )}
+                  {canDispose && detailAsset.status !== 'Retired' && detailAsset.status !== 'Assigned' && (
+                    <button
+                      type="button"
+                      onClick={() => setDisposeAsset(detailAsset)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300/60 dark:border-rose-500/30 bg-rose-50/60 dark:bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-700 dark:text-rose-400 hover:bg-rose-100/80 transition-colors"
+                    >
+                      <Archive className="h-3.5 w-3.5" />
+                      <span>Retire</span>
+                    </button>
+                  )}
                 </div>
 
-                {/* Specifications Grid */}
-                <div className="rounded-xl border border-[var(--av-border)] divide-y divide-[var(--av-border-subtle)]">
-                  <div className="grid grid-cols-2 gap-4 p-4">
-                    <div>
-                      <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
-                        Status
+                {/* Detail Drawer Tabs */}
+                <div className="flex flex-wrap gap-1.5 border-b border-[var(--av-border-subtle)] pb-2.5">
+                  {(
+                    [
+                      { id: 'overview', label: 'Overview & Specs' },
+                      {
+                        id: 'timeline',
+                        label: `Timeline (${
+                          buildAssetTimelineEvents(
+                            detailAsset,
+                            detailAssignments,
+                            detailMaintenance,
+                            detailTransfers
+                          ).length
+                        })`,
+                      },
+                      { id: 'assignments', label: `Assignments (${detailAssignments.length})` },
+                      { id: 'maintenance', label: `Maintenance (${detailMaintenance.length})` },
+                      {
+                        id: 'lifecycle',
+                        label: `Tickets & Transfers (${detailTickets.length + detailTransfers.length})`,
+                      },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setDetailTab(tab.id)}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        detailTab === tab.id
+                          ? 'bg-[var(--av-accent)] text-white'
+                          : 'text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)]'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                {detailTab === 'overview' && (
+                  <div className="space-y-4">
+                    <div className="rounded-xl border border-[var(--av-border)] divide-y divide-[var(--av-border-subtle)]">
+                      <div className="grid grid-cols-2 gap-4 p-4">
+                        <div>
+                          <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
+                            Status
+                          </div>
+                          <div className="mt-1">
+                            <AssetStatusIndicator status={detailAsset.status} />
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
+                            Serial Number
+                          </div>
+                          <div className="mt-1 font-mono text-xs font-semibold text-[var(--av-text)]">
+                            {detailAsset.serial_number}
+                          </div>
+                        </div>
                       </div>
-                      <div className="mt-1">
-                        <AssetStatusIndicator status={detailAsset.status} />
+                      <div className="grid grid-cols-2 gap-4 p-4">
+                        <div>
+                          <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
+                            Purchase Date
+                          </div>
+                          <div className="mt-1 font-mono text-xs text-[var(--av-text)] tabular-nums">
+                            {detailAsset.purchase_date}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
+                            Warranty Expiry
+                          </div>
+                          <div className="mt-1 font-mono text-xs text-[var(--av-text)] tabular-nums">
+                            {detailAsset.warranty_expiry}
+                          </div>
+                        </div>
                       </div>
+                      <div className="grid grid-cols-2 gap-4 p-4">
+                        <div>
+                          <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
+                            Acquisition Cost / Book Value
+                          </div>
+                          <div className="mt-1 font-mono text-xs font-semibold text-[var(--av-text)] tabular-nums">
+                            {formatCurrencyExact(detailAsset.cost)} ·{' '}
+                            <span className="text-emerald-600 dark:text-emerald-400">
+                              Book {formatCurrencyExact(computeAssetBookValue(detailAsset))}
+                            </span>
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
+                            Location
+                          </div>
+                          <div className="mt-1 text-xs text-[var(--av-text)]">
+                            {detailAsset.location}
+                            {detailAsset.org_name ? ` · ${detailAsset.org_name}` : ''}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="p-4">
+                        <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
+                          Current Custody
+                        </div>
+                        <div className="mt-1 text-xs text-[var(--av-text)]">
+                          {detailAsset.assigned_employee_name ? (
+                            <span>
+                              <strong>{detailAsset.assigned_employee_name}</strong> (
+                              {detailAsset.assigned_employee_code}) ·{' '}
+                              {detailAsset.assigned_employee_department} · Issued{' '}
+                              {detailAsset.assigned_date}
+                            </span>
+                          ) : (
+                            <span className="text-[var(--av-text-subtle)]">
+                              Not assigned to an employee
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {detailAsset.disposal_status === 'disposed' && (
+                        <div className="p-4 bg-rose-50/60 dark:bg-rose-500/10">
+                          <div className="text-[11px] font-semibold text-rose-700 dark:text-rose-400">
+                            Decommissioned / Disposed ({detailAsset.disposal_date})
+                          </div>
+                          <p className="mt-1 text-xs text-[var(--av-text-muted)]">
+                            {detailAsset.disposal_reason} · Approved by {detailAsset.disposal_approved_by}
+                          </p>
+                        </div>
+                      )}
+                      {detailAsset.notes && (
+                        <div className="p-4">
+                          <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
+                            Notes
+                          </div>
+                          <p className="mt-1 text-xs leading-relaxed text-[var(--av-text-muted)]">
+                            {detailAsset.notes}
+                          </p>
+                        </div>
+                      )}
                     </div>
+
+                    {detailAsset.specs && Object.values(detailAsset.specs).some(Boolean) && (
+                      <div className="rounded-xl border border-[var(--av-border)] p-4">
+                        <div className="text-xs font-semibold text-[var(--av-text)] mb-2.5">
+                          Hardware &amp; Network Specifications
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 text-xs">
+                          {detailAsset.specs.cpu && (
+                            <div>
+                              <span className="text-[var(--av-text-subtle)]">CPU:</span>{' '}
+                              <span className="font-medium text-[var(--av-text)]">{detailAsset.specs.cpu}</span>
+                            </div>
+                          )}
+                          {detailAsset.specs.ram && (
+                            <div>
+                              <span className="text-[var(--av-text-subtle)]">RAM:</span>{' '}
+                              <span className="font-medium text-[var(--av-text)]">{detailAsset.specs.ram}</span>
+                            </div>
+                          )}
+                          {detailAsset.specs.storage && (
+                            <div>
+                              <span className="text-[var(--av-text-subtle)]">Storage:</span>{' '}
+                              <span className="font-medium text-[var(--av-text)]">{detailAsset.specs.storage}</span>
+                            </div>
+                          )}
+                          {detailAsset.specs.os && (
+                            <div>
+                              <span className="text-[var(--av-text-subtle)]">OS:</span>{' '}
+                              <span className="font-medium text-[var(--av-text)]">{detailAsset.specs.os}</span>
+                            </div>
+                          )}
+                          {detailAsset.specs.hostname && (
+                            <div>
+                              <span className="text-[var(--av-text-subtle)]">Hostname:</span>{' '}
+                              <span className="font-mono text-[var(--av-text)]">{detailAsset.specs.hostname}</span>
+                            </div>
+                          )}
+                          {detailAsset.specs.ip_address && (
+                            <div>
+                              <span className="text-[var(--av-text-subtle)]">IP:</span>{' '}
+                              <span className="font-mono text-[var(--av-text)]">{detailAsset.specs.ip_address}</span>
+                            </div>
+                          )}
+                          {detailAsset.specs.mac_address && (
+                            <div className="col-span-2">
+                              <span className="text-[var(--av-text-subtle)]">MAC:</span>{' '}
+                              <span className="font-mono text-[var(--av-text)]">{detailAsset.specs.mac_address}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     <div>
-                      <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
-                        Serial Number
+                      <div className="mb-2.5 flex items-center justify-between">
+                        <h4 className="font-display text-sm font-semibold text-[var(--av-text)]">
+                          Recent Lifecycle Timeline
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => setDetailTab('timeline')}
+                          className="text-xs font-semibold text-[var(--av-accent)] hover:underline"
+                        >
+                          Full timeline →
+                        </button>
                       </div>
-                      <div className="mt-1 font-mono text-xs font-semibold text-[var(--av-text)]">
-                        {detailAsset.serial_number}
-                      </div>
+                      <AssetTimeline
+                        asset={detailAsset}
+                        assignments={detailAssignments}
+                        maintenanceLogs={detailMaintenance}
+                        transfers={detailTransfers}
+                        loading={detailLoading}
+                        compactLimit={4}
+                        onViewAll={() => setDetailTab('timeline')}
+                      />
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-4 p-4">
-                    <div>
-                      <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
-                        Purchase Date
-                      </div>
-                      <div className="mt-1 font-mono text-xs text-[var(--av-text)] tabular-nums">
-                        {detailAsset.purchase_date}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
-                        Warranty Expiry
-                      </div>
-                      <div className="mt-1 font-mono text-xs text-[var(--av-text)] tabular-nums">
-                        {detailAsset.warranty_expiry}
-                      </div>
-                    </div>
+                )}
+
+                {detailTab === 'timeline' && (
+                  <div>
+                    <h4 className="font-display text-sm font-semibold text-[var(--av-text)] mb-2.5">
+                      Historical Asset Timeline
+                    </h4>
+                    <AssetTimeline
+                      asset={detailAsset}
+                      assignments={detailAssignments}
+                      maintenanceLogs={detailMaintenance}
+                      transfers={detailTransfers}
+                      loading={detailLoading}
+                    />
                   </div>
-                  <div className="grid grid-cols-2 gap-4 p-4">
-                    <div>
-                      <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
-                        Acquisition Cost
+                )}
+
+                {detailTab === 'assignments' && (
+                  <div>
+                    <h4 className="font-display text-sm font-semibold text-[var(--av-text)] mb-2.5">
+                      Assignment History
+                    </h4>
+                    {detailLoading ? (
+                      <div className="space-y-2 rounded-xl border border-[var(--av-border)] p-3.5">
+                        <div className="flex items-center gap-2 text-xs text-[var(--av-text-subtle)]">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--av-accent)]" />
+                          <span>Loading assignment history...</span>
+                        </div>
+                        <div className="h-8 w-full rounded-lg av-shimmer" />
                       </div>
-                      <div className="mt-1 font-mono text-xs font-semibold text-[var(--av-text)] tabular-nums">
-                        {formatCurrencyExact(detailAsset.cost)}
+                    ) : detailAssignments.length === 0 ? (
+                      <p className="text-xs text-[var(--av-text-subtle)] rounded-xl border border-[var(--av-border)] p-4">
+                        No previous assignment records for this asset.
+                      </p>
+                    ) : (
+                      <div className="rounded-xl border border-[var(--av-border)] divide-y divide-[var(--av-border-subtle)]">
+                        {detailAssignments.map((a) => (
+                          <div key={a.id} className="p-3.5 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-semibold text-[var(--av-text)]">
+                                {a.employee_name} ({a.employee_department})
+                              </span>
+                              <span className="font-mono text-[11px] text-[var(--av-text-subtle)]">
+                                {a.handover_number}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-[var(--av-text-subtle)] tabular-nums">
+                              Issued {a.assigned_date} ·{' '}
+                              {a.returned_date
+                                ? `Returned ${a.returned_date} (${a.condition_in})`
+                                : 'Active Assignment'}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    </div>
-                    <div>
-                      <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
-                        Location
-                      </div>
-                      <div className="mt-1 text-xs text-[var(--av-text)]">
-                        {detailAsset.location}
-                      </div>
-                    </div>
+                    )}
                   </div>
-                  <div className="p-4">
-                    <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
-                      Current Custody
+                )}
+
+                {detailTab === 'maintenance' && (
+                  <div>
+                    <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="font-display text-sm font-semibold text-[var(--av-text)]">
+                        Maintenance &amp; Service History
+                      </h4>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={detailLoading}
+                          onClick={() => setMaintReportOpen(true)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-2.5 py-1.5 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] disabled:opacity-50 transition-colors"
+                        >
+                          <Printer className="h-3.5 w-3.5" />
+                          <span>Preview &amp; Print</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={detailLoading}
+                          onClick={() => {
+                            generateAssetMaintenanceSummaryPDF({
+                              asset: detailAsset,
+                              maintenanceLogs: detailMaintenance,
+                              orgName:
+                                detailAsset.org_name ||
+                                tenantCtx?.activeOrg?.name ||
+                                tenantCtx?.tenant?.name ||
+                                undefined,
+                            });
+                            onToast(
+                              'success',
+                              `Maintenance summary PDF for ${detailAsset.asset_tag} downloaded.`
+                            );
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] disabled:opacity-50 transition-colors"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          <span>Export PDF</span>
+                        </button>
+                      </div>
                     </div>
-                    <div className="mt-1 text-xs text-[var(--av-text)]">
-                      {detailAsset.assigned_employee_name ? (
-                        <span>
-                          <strong>{detailAsset.assigned_employee_name}</strong> (
-                          {detailAsset.assigned_employee_code}) ·{' '}
-                          {detailAsset.assigned_employee_department} · Issued{' '}
-                          {detailAsset.assigned_date}
-                        </span>
+                    {detailLoading ? (
+                      <div className="space-y-2 rounded-xl border border-[var(--av-border)] p-3.5">
+                        <div className="flex items-center gap-2 text-xs text-[var(--av-text-subtle)]">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--av-accent)]" />
+                          <span>Loading service logs...</span>
+                        </div>
+                        <div className="h-8 w-full rounded-lg av-shimmer" />
+                      </div>
+                    ) : detailMaintenance.length === 0 ? (
+                      <p className="text-xs text-[var(--av-text-subtle)] rounded-xl border border-[var(--av-border)] p-4">
+                        No repairs or maintenance services recorded.
+                      </p>
+                    ) : (
+                      <div className="rounded-xl border border-[var(--av-border)] divide-y divide-[var(--av-border-subtle)]">
+                        {detailMaintenance.map((m) => (
+                          <div key={m.id} className="p-3.5 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-semibold text-[var(--av-text)]">
+                                {m.maintenance_type}: {m.issue_description}
+                              </span>
+                              <MaintenanceStatusIndicator status={m.status} />
+                            </div>
+                            <div className="mt-1 text-[var(--av-text-subtle)] tabular-nums">
+                              {m.service_date} · {m.vendor_or_technician} ·{' '}
+                              {formatCurrencyExact(m.cost)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {detailTab === 'lifecycle' && (
+                  <div className="space-y-5">
+                    <div>
+                      <h4 className="font-display text-sm font-semibold text-[var(--av-text)] mb-2">
+                        Linked Helpdesk Tickets
+                      </h4>
+                      {detailTickets.length === 0 ? (
+                        <p className="text-xs text-[var(--av-text-subtle)] rounded-xl border border-[var(--av-border)] p-4">
+                          No helpdesk tickets linked to this asset.
+                        </p>
                       ) : (
-                        <span className="text-[var(--av-text-subtle)]">
-                          Not assigned to an employee
-                        </span>
+                        <div className="rounded-xl border border-[var(--av-border)] divide-y divide-[var(--av-border-subtle)]">
+                          {detailTickets.map((t) => (
+                            <div key={t.id} className="p-3.5 text-xs">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-mono font-semibold text-[var(--av-accent)]">
+                                  {t.ticketNumber}
+                                </span>
+                                <span className="font-medium text-[var(--av-text-muted)]">
+                                  {t.status} · {t.priority}
+                                </span>
+                              </div>
+                              <div className="mt-1 font-medium text-[var(--av-text)]">
+                                {t.subject}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <h4 className="font-display text-sm font-semibold text-[var(--av-text)] mb-2">
+                        Location &amp; Org Transfer History
+                      </h4>
+                      {detailTransfers.length === 0 ? (
+                        <p className="text-xs text-[var(--av-text-subtle)] rounded-xl border border-[var(--av-border)] p-4">
+                          No transfers recorded for this asset.
+                        </p>
+                      ) : (
+                        <div className="rounded-xl border border-[var(--av-border)] divide-y divide-[var(--av-border-subtle)]">
+                          {detailTransfers.map((tr) => (
+                            <div key={tr.id} className="p-3.5 text-xs">
+                              <div className="font-semibold text-[var(--av-text)]">
+                                {tr.fromLocation} → {tr.toLocation}
+                              </div>
+                              <div className="mt-1 text-[var(--av-text-subtle)]">
+                                {tr.reason} · By {tr.transferredBy} on {tr.transferredAt.slice(0, 10)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </div>
                   </div>
-                  {detailAsset.notes && (
-                    <div className="p-4">
-                      <div className="text-[11px] font-medium text-[var(--av-text-subtle)]">
-                        Notes
-                      </div>
-                      <p className="mt-1 text-xs leading-relaxed text-[var(--av-text-muted)]">
-                        {detailAsset.notes}
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Assignment History */}
-                <div>
-                  <h4 className="font-display text-sm font-semibold text-[var(--av-text)] mb-2.5">
-                    Assignment History
-                  </h4>
-                  {detailLoading ? (
-                    <div className="space-y-2 rounded-xl border border-[var(--av-border)] p-3.5">
-                      <div className="flex items-center gap-2 text-xs text-[var(--av-text-subtle)]">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--av-accent)]" />
-                        <span>Loading assignment history...</span>
-                      </div>
-                      <div className="h-8 w-full rounded-lg av-shimmer" />
-                    </div>
-                  ) : detailAssignments.length === 0 ? (
-                    <p className="text-xs text-[var(--av-text-subtle)] rounded-xl border border-[var(--av-border)] p-4">
-                      No previous assignment records for this asset.
-                    </p>
-                  ) : (
-                    <div className="rounded-xl border border-[var(--av-border)] divide-y divide-[var(--av-border-subtle)]">
-                      {detailAssignments.map((a) => (
-                        <div key={a.id} className="p-3.5 text-xs">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-semibold text-[var(--av-text)]">
-                              {a.employee_name} ({a.employee_department})
-                            </span>
-                            <span className="font-mono text-[11px] text-[var(--av-text-subtle)]">
-                              {a.handover_number}
-                            </span>
-                          </div>
-                          <div className="mt-1 text-[var(--av-text-subtle)] tabular-nums">
-                            Issued {a.assigned_date} ·{' '}
-                            {a.returned_date
-                              ? `Returned ${a.returned_date} (${a.condition_in})`
-                              : 'Active Assignment'}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Maintenance History */}
-                <div>
-                  <h4 className="font-display text-sm font-semibold text-[var(--av-text)] mb-2.5">
-                    Maintenance & Service History
-                  </h4>
-                  {detailLoading ? (
-                    <div className="space-y-2 rounded-xl border border-[var(--av-border)] p-3.5">
-                      <div className="flex items-center gap-2 text-xs text-[var(--av-text-subtle)]">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--av-accent)]" />
-                        <span>Loading service logs...</span>
-                      </div>
-                      <div className="h-8 w-full rounded-lg av-shimmer" />
-                    </div>
-                  ) : detailMaintenance.length === 0 ? (
-                    <p className="text-xs text-[var(--av-text-subtle)] rounded-xl border border-[var(--av-border)] p-4">
-                      No repairs or maintenance services recorded.
-                    </p>
-                  ) : (
-                    <div className="rounded-xl border border-[var(--av-border)] divide-y divide-[var(--av-border-subtle)]">
-                      {detailMaintenance.map((m) => (
-                        <div key={m.id} className="p-3.5 text-xs">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-semibold text-[var(--av-text)]">
-                              {m.maintenance_type}: {m.issue_description}
-                            </span>
-                            <MaintenanceStatusIndicator status={m.status} />
-                          </div>
-                          <div className="mt-1 text-[var(--av-text-subtle)] tabular-nums">
-                            {m.service_date} · {m.vendor_or_technician} ·{' '}
-                            {formatCurrencyExact(m.cost)}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* QR/Barcode Label, Maintenance Summary PDF, Scanner Lookup, Bulk Import, Transfer, Dispose */}
+      <AssetLabelModal
+        asset={labelAsset}
+        onClose={() => setLabelAsset(null)}
+        onToast={onToast}
+      />
+      <AssetMaintenanceReportModal
+        asset={maintReportOpen ? detailAsset : null}
+        maintenanceLogs={detailMaintenance}
+        orgName={
+          detailAsset?.org_name ||
+          tenantCtx?.activeOrg?.name ||
+          tenantCtx?.tenant?.name ||
+          undefined
+        }
+        onClose={() => setMaintReportOpen(false)}
+        onToast={onToast}
+      />
+      <AssetLookupModal
+        open={lookupOpen}
+        assets={assets}
+        onClose={() => setLookupOpen(false)}
+        onSelectAsset={(id) => openDetail(id)}
+        onToast={onToast}
+      />
+      <BulkImportAssetsModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={onRefresh}
+        onToast={onToast}
+        onPlanBlocked={onPlanBlocked}
+      />
+      <TransferAssetModal
+        asset={transferAsset}
+        tenantCtx={tenantCtx}
+        onClose={() => setTransferAsset(null)}
+        onTransferred={async () => {
+          await onRefresh();
+          if (detailAsset) await openDetail(detailAsset.id);
+        }}
+        onToast={onToast}
+        onPlanBlocked={onPlanBlocked}
+      />
+      <DisposeAssetModal
+        asset={disposeAsset}
+        onClose={() => setDisposeAsset(null)}
+        onDisposed={async () => {
+          await onRefresh();
+          if (detailAsset) await openDetail(detailAsset.id);
+        }}
+        onToast={onToast}
+        onPlanBlocked={onPlanBlocked}
+      />
 
       {/* Delete Confirmation */}
       <ConfirmDialog

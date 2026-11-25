@@ -1,14 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import {
+  AlertTriangle,
   ArrowLeftRight,
   Bell,
+  BookOpen,
+  Building2,
   ChevronDown,
   ChevronRight,
+  CreditCard,
+  Crown,
   FileBarChart2,
+  FileCheck2,
+  GitBranch,
   HardDrive,
   HelpCircle,
+  History,
+  KeyRound,
   LayoutDashboard,
+  LifeBuoy,
+  Lock,
   LogOut,
   Menu,
   Moon,
@@ -17,6 +28,7 @@ import {
   Search,
   Server,
   Shield,
+  ShoppingCart,
   Sun,
   Users,
   Wrench,
@@ -24,19 +36,38 @@ import {
 } from 'lucide-react';
 import { AssetsView } from './components/AssetsView.tsx';
 import { AssignmentsView } from './components/AssignmentsView.tsx';
+import { AuditLogsView } from './components/AuditLogsView.tsx';
 import { DashboardView, type NavSection } from './components/DashboardView.tsx';
 import { EmployeesView } from './components/EmployeesView.tsx';
+import { HelpdeskView } from './components/HelpdeskView.tsx';
+import { ItsmView } from './components/ItsmView.tsx';
+import { KnowledgeBaseView } from './components/KnowledgeBaseView.tsx';
 import { LoginView } from './components/LoginView.tsx';
 import { MaintenanceView } from './components/MaintenanceView.tsx';
 import { NotificationsView } from './components/NotificationsView.tsx';
+import { OrgStructureView } from './components/OrgStructureView.tsx';
+import { ProcurementView } from './components/ProcurementView.tsx';
 import { ReportsView } from './components/ReportsView.tsx';
+import { SlaAndContractsView } from './components/SlaAndContractsView.tsx';
+import { SoftwareLicencesView } from './components/SoftwareLicencesView.tsx';
+import { SubscriptionBillingView } from './components/SubscriptionBillingView.tsx';
+import { SuperAdminView } from './components/SuperAdminView.tsx';
 import { ThemeSwitcher } from './components/ThemeSwitcher.tsx';
 import { ToastContainer, type ToastMessage } from './components/Toast.tsx';
 import { AppLoader } from './components/ui/AppLoader.tsx';
 import { GlobalSearchModal } from './components/ui/GlobalSearchModal.tsx';
 import { SupportModal } from './components/ui/SupportModal.tsx';
 import { UsersView } from './components/UsersView.tsx';
-import { api, ApiError, getStoredToken, setStoredToken } from './lib/api.ts';
+import {
+  api,
+  ApiError,
+  getStoredToken,
+  setActiveOrgId,
+  setActiveTenantId,
+  setStoredToken,
+  type ExtendedTenantContext,
+  type ExtendedUser,
+} from './lib/api.ts';
 import { googleSignOut, initGoogleAuthListener } from './lib/googleAuth.ts';
 import { useTheme } from './lib/theme.tsx';
 import type {
@@ -48,50 +79,106 @@ import type {
   SystemNotification,
   User,
 } from './types/itams.ts';
+import type {
+  PermissionCode,
+  PurchaseOrder,
+  SoftwareLicence,
+  Ticket,
+} from './types/saas.ts';
 
 const SECTION_META: Record<
   NavSection,
   { group: string; label: string; subtitle: string }
 > = {
   dashboard: {
-    group: 'Overview',
+    group: 'Core Operations',
     label: 'Dashboard',
-    subtitle: 'Executive inventory overview, utilization, and compliance alerts',
+    subtitle: 'Executive inventory overview, SLA health, and compliance alerts',
   },
   assets: {
-    group: 'Operations',
+    group: 'Core Operations',
     label: 'Asset Inventory',
-    subtitle: 'Manage corporate hardware, serials, warranties, and lifecycle state',
+    subtitle: 'Manage corporate hardware, QR/barcodes, depreciation, and lifecycle state',
   },
   employees: {
-    group: 'Operations',
+    group: 'Core Operations',
     label: 'Employees',
     subtitle: 'Organization directory, departments, and equipment custody history',
   },
   assignments: {
-    group: 'Operations',
+    group: 'Core Operations',
     label: 'Assignments & Handovers',
     subtitle: 'Issue, return, and generate signed PDF equipment handover records',
   },
   maintenance: {
-    group: 'Operations',
+    group: 'Core Operations',
     label: 'Maintenance',
     subtitle: 'Track hardware repairs, preventive service schedules, and costs',
   },
+  licences: {
+    group: 'Core Operations',
+    label: 'Software Licences',
+    subtitle: 'Seat allocations, masked/unmasked keys, and annual GH₵ renewals',
+  },
+  tickets: {
+    group: 'Helpdesk & ITSM',
+    label: 'IT Helpdesk',
+    subtitle: 'Multi-tenant ticketing queue, SLA timers, internal notes, and CSAT',
+  },
+  itsm: {
+    group: 'Helpdesk & ITSM',
+    label: 'ITSM Suite',
+    subtitle: 'Incidents, service catalogue requests, problems (KEDB), and CAB changes',
+  },
+  sla_contracts: {
+    group: 'Helpdesk & ITSM',
+    label: 'SLAs & Contracts',
+    subtitle: 'Response/resolution policies, vendor retainers, and automated compliance',
+  },
+  kb: {
+    group: 'Helpdesk & ITSM',
+    label: 'Knowledge Base',
+    subtitle: 'Self-service portal guides and internal IT troubleshooting runbooks',
+  },
+  procurement: {
+    group: 'Governance & Spend',
+    label: 'Procurement',
+    subtitle: 'Vendors, purchase requests, PO issuance, and automated asset receiving',
+  },
   reports: {
-    group: 'Governance',
+    group: 'Governance & Spend',
     label: 'Reports & Exports',
-    subtitle: 'Generate filterable inventory, custody, and warranty audit exports',
+    subtitle: 'Generate filterable inventory, helpdesk, licence, and procurement exports',
   },
   notifications: {
-    group: 'Governance',
+    group: 'Governance & Spend',
     label: 'Notifications',
-    subtitle: 'Expiring warranties, overdue maintenance, and replacement advisories',
+    subtitle: 'Expiring warranties, overdue maintenance, and SLA advisories',
+  },
+  audit_logs: {
+    group: 'Governance & Spend',
+    label: 'Audit Logs',
+    subtitle: 'Immutable tenant activity stream across assets, tickets, and billing',
+  },
+  org_structure: {
+    group: 'Workspace & Billing',
+    label: 'Organisations & Sites',
+    subtitle: 'Manage MSP client organisations, office locations, and departments',
   },
   users: {
-    group: 'Governance',
-    label: 'User Management',
-    subtitle: 'Manage Admin and IT Staff authentication accounts and permissions',
+    group: 'Workspace & Billing',
+    label: 'Users & Access',
+    subtitle: 'Manage role-based permissions, client scopes, and workspace invitations',
+  },
+  billing: {
+    group: 'Workspace & Billing',
+    label: 'Billing & Plans',
+    subtitle: 'GH₵ subscription tiers, usage quotas, Paystack checkout, and invoices',
+  },
+  super_admin: {
+    group: 'Platform Admin',
+    label: 'Platform Console',
+    subtitle: 'Cross-tenant governance, GH₵ plan pricing, payments, and system settings',
   },
 };
 
@@ -109,7 +196,8 @@ function readInitialSidebarCollapsed(): boolean {
 export default function App() {
   const { isDark, toggleTheme } = useTheme();
   const [authChecked, setAuthChecked] = useState(false);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<ExtendedUser | null>(null);
+  const [tenantCtx, setTenantCtx] = useState<ExtendedTenantContext | null>(null);
   const [activeSection, setActiveSection] = useState<NavSection>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
@@ -132,7 +220,13 @@ export default function App() {
   const [assignments, setAssignments] = useState<AssetAssignment[]>([]);
   const [maintenanceLogs, setMaintenanceLogs] = useState<MaintenanceLog[]>([]);
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
+  const [users, setUsers] = useState<ExtendedUser[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [licences, setLicences] = useState<SoftwareLicence[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+
+  // Plan quota / feature / read-only block modal
+  const [blockedModalErr, setBlockedModalErr] = useState<ApiError | null>(null);
 
   // Cross-module contextual selection state
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
@@ -172,6 +266,10 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  const handlePlanBlocked = useCallback((err: ApiError) => {
+    setBlockedModalErr(err);
+  }, []);
+
   // Global Cmd/Ctrl + K shortcut and outside-click handlers for dropdowns
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -202,32 +300,81 @@ export default function App() {
     async (user: User) => {
       setDataLoading(true);
       try {
-        const [dashRes, assetsRes, empRes, asgRes, mntRes, notifRes] =
-          await Promise.all([
-            api.getDashboard(),
-            api.listAssets(),
-            api.listEmployees(),
-            api.listAssignments(),
-            api.listMaintenance(),
-            api.listNotifications(),
-          ]);
+        const ctx = await api.getContext();
+        setTenantCtx(ctx);
+        setActiveTenantId(ctx.tenant.id);
+        setActiveOrgId(ctx.isAllOrgsView ? 'all' : ctx.activeOrg.id);
+
+        const perms = new Set<PermissionCode>(ctx.permissions);
+        const features = new Set(ctx.effectiveFeatures);
+
+        const [
+          dashRes,
+          assetsRes,
+          empRes,
+          asgRes,
+          mntRes,
+          notifRes,
+          usersRes,
+          ticketsRes,
+          licencesRes,
+          procRes,
+        ] = await Promise.all([
+          perms.has('dashboard.read')
+            ? api.getDashboard().catch(() => null)
+            : Promise.resolve(null),
+          perms.has('assets.read')
+            ? api.listAssets().catch(() => ({ assets: [] }))
+            : Promise.resolve({ assets: [] }),
+          perms.has('employees.read')
+            ? api.listEmployees().catch(() => ({ employees: [] }))
+            : Promise.resolve({ employees: [] }),
+          perms.has('assignments.read')
+            ? api.listAssignments().catch(() => ({ assignments: [] }))
+            : Promise.resolve({ assignments: [] }),
+          perms.has('maintenance.read')
+            ? api.listMaintenance().catch(() => ({ maintenanceLogs: [] }))
+            : Promise.resolve({ maintenanceLogs: [] }),
+          api.listNotifications().catch(() => ({ notifications: [] })),
+          perms.has('users.read') || user.role === 'admin'
+            ? api.listUsers().catch(() => ({ users: [] }))
+            : Promise.resolve({ users: [] }),
+          perms.has('tickets.read') && features.has('helpdesk')
+            ? api.listTickets().catch(() => ({ tickets: [] }))
+            : Promise.resolve({ tickets: [] }),
+          perms.has('licences.read') && features.has('software_licences')
+            ? api.listLicences().catch(() => ({ licences: [], canViewKeys: false }))
+            : Promise.resolve({ licences: [], canViewKeys: false }),
+          perms.has('procurement.read') && features.has('procurement')
+            ? api.getProcurement().catch(() => ({
+                vendors: [],
+                purchaseRequests: [],
+                purchaseOrders: [],
+              }))
+            : Promise.resolve({
+                vendors: [],
+                purchaseRequests: [],
+                purchaseOrders: [],
+              }),
+        ]);
+
         setDashboardSummary(dashRes);
         setAssets(assetsRes.assets);
         setEmployees(empRes.employees);
         setAssignments(asgRes.assignments);
         setMaintenanceLogs(mntRes.maintenanceLogs);
         setNotifications(notifRes.notifications);
-
-        if (user.role === 'admin') {
-          const usersRes = await api.listUsers();
-          setUsers(usersRes.users);
-        } else {
-          setUsers([]);
-        }
+        setUsers(usersRes.users);
+        setTickets(ticketsRes.tickets);
+        setLicences(licencesRes.licences);
+        setPurchaseOrders(procRes.purchaseOrders);
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
           setStoredToken(null);
+          setActiveTenantId(null);
+          setActiveOrgId(null);
           setCurrentUser(null);
+          setTenantCtx(null);
         } else {
           pushToast(
             'error',
@@ -260,12 +407,38 @@ export default function App() {
       }
       try {
         const res = await api.me();
-        if (active) {
-          setCurrentUser(res.user);
-          await loadWorkspaceData(res.user);
+        if (!active) return;
+        setCurrentUser(res.user);
+
+        // Handle Paystack redirect callback (?paystack_ref=...)
+        const params = new URLSearchParams(window.location.search);
+        const paystackRef = params.get('paystack_ref') || params.get('reference');
+        if (paystackRef) {
+          try {
+            await api.verifyPaystack(paystackRef);
+            setActiveSection('billing');
+            pushToast(
+              'success',
+              'Paystack payment verified and subscription updated.'
+            );
+          } catch (verifyErr) {
+            setActiveSection('billing');
+            pushToast(
+              'error',
+              verifyErr instanceof ApiError
+                ? verifyErr.message
+                : 'Unable to verify Paystack transaction.'
+            );
+          } finally {
+            window.history.replaceState({}, '', window.location.pathname);
+          }
         }
+
+        await loadWorkspaceData(res.user);
       } catch {
         setStoredToken(null);
+        setActiveTenantId(null);
+        setActiveOrgId(null);
       } finally {
         if (active) setAuthChecked(true);
       }
@@ -274,10 +447,12 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [loadWorkspaceData]);
+  }, [loadWorkspaceData, pushToast]);
 
   const handleLoginSuccess = async (token: string, user: User) => {
     setStoredToken(token);
+    setActiveTenantId(null);
+    setActiveOrgId(null);
     setCurrentUser(user);
     setActiveSection('dashboard');
     await loadWorkspaceData(user);
@@ -292,7 +467,10 @@ export default function App() {
       // Ignore network errors on logout
     }
     setStoredToken(null);
+    setActiveTenantId(null);
+    setActiveOrgId(null);
     setCurrentUser(null);
+    setTenantCtx(null);
     setDashboardSummary(null);
     setAssets([]);
     setEmployees([]);
@@ -300,6 +478,9 @@ export default function App() {
     setMaintenanceLogs([]);
     setNotifications([]);
     setUsers([]);
+    setTickets([]);
+    setLicences([]);
+    setPurchaseOrders([]);
   };
 
   const handleRefresh = useCallback(async () => {
@@ -307,8 +488,79 @@ export default function App() {
     await loadWorkspaceData(currentUser);
   }, [currentUser, loadWorkspaceData]);
 
+  const handleSwitchTenant = async (tenantId: string) => {
+    if (!currentUser || tenantId === tenantCtx?.tenant.id) return;
+    setActiveTenantId(tenantId);
+    setActiveOrgId(null);
+    setActiveSection('dashboard');
+    await loadWorkspaceData(currentUser);
+    pushToast('success', 'Switched tenant workspace.');
+  };
+
+  const handleSwitchOrg = async (orgId: string) => {
+    if (!currentUser) return;
+    setActiveOrgId(orgId);
+    await loadWorkspaceData(currentUser);
+    pushToast(
+      'success',
+      orgId === 'all' ? 'Viewing all MSP client organisations.' : 'Switched client organisation scope.'
+    );
+  };
+
+  const permsSet = new Set<PermissionCode>(tenantCtx?.permissions ?? []);
+  const hasPerm = (p: PermissionCode) =>
+    permsSet.has(p) || Boolean(tenantCtx?.isSuperAdmin);
+
+  const canAccessSection = (section: NavSection): boolean => {
+    if (section === 'super_admin') return Boolean(tenantCtx?.isSuperAdmin);
+    if (!tenantCtx) {
+      return section !== 'users' || currentUser?.role === 'admin';
+    }
+    switch (section) {
+      case 'dashboard':
+        return hasPerm('dashboard.read');
+      case 'assets':
+        return hasPerm('assets.read');
+      case 'employees':
+        return hasPerm('employees.read');
+      case 'assignments':
+        return hasPerm('assignments.read');
+      case 'maintenance':
+        return hasPerm('maintenance.read');
+      case 'licences':
+        return hasPerm('licences.read');
+      case 'tickets':
+        return hasPerm('tickets.read');
+      case 'itsm':
+        return hasPerm('itsm.read');
+      case 'sla_contracts':
+        return hasPerm('sla.read') || hasPerm('contracts.read');
+      case 'kb':
+        return hasPerm('kb.read');
+      case 'procurement':
+        return hasPerm('procurement.read');
+      case 'reports':
+        return hasPerm('reports.read');
+      case 'notifications':
+        return true;
+      case 'audit_logs':
+        return hasPerm('audit.read');
+      case 'org_structure':
+        return hasPerm('org.read');
+      case 'users':
+        return hasPerm('users.read');
+      case 'billing':
+        return hasPerm('billing.read');
+      default:
+        return true;
+    }
+  };
+
   const navigateTo = (section: NavSection) => {
-    if (section === 'users' && currentUser?.role !== 'admin') return;
+    if (!canAccessSection(section)) {
+      pushToast('error', 'Your current workspace role does not have access to this module.');
+      return;
+    }
     setActiveSection(section);
     setMobileMenuOpen(false);
     setNotifPopoverOpen(false);
@@ -342,39 +594,74 @@ export default function App() {
     );
   }
 
+  type NavGroupKey =
+    | 'core'
+    | 'helpdesk_itsm'
+    | 'governance_spend'
+    | 'workspace_billing'
+    | 'platform_admin';
+
   type NavItem = {
     id: NavSection;
     label: string;
     icon: typeof LayoutDashboard;
     iconColor: string;
-    group: 'operations' | 'governance';
+    group: NavGroupKey;
     badge?: number;
-    adminOnly?: boolean;
   };
 
+  const openTicketCount = tickets.filter(
+    (t) => t.status !== 'Resolved' && t.status !== 'Closed'
+  ).length;
+
   const navItems: NavItem[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, iconColor: 'text-sky-400', group: 'operations' },
-    { id: 'assets', label: 'Asset Inventory', icon: HardDrive, iconColor: 'text-indigo-400', group: 'operations' },
-    { id: 'employees', label: 'Employees', icon: Users, iconColor: 'text-teal-400', group: 'operations' },
-    { id: 'assignments', label: 'Assignments', icon: ArrowLeftRight, iconColor: 'text-violet-400', group: 'operations' },
-    { id: 'maintenance', label: 'Maintenance', icon: Wrench, iconColor: 'text-amber-400', group: 'operations' },
-    { id: 'reports', label: 'Reports', icon: FileBarChart2, iconColor: 'text-emerald-400', group: 'governance' },
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, iconColor: 'text-sky-400', group: 'core' },
+    { id: 'assets', label: 'Asset Inventory', icon: HardDrive, iconColor: 'text-indigo-400', group: 'core' },
+    { id: 'employees', label: 'Employees', icon: Users, iconColor: 'text-teal-400', group: 'core' },
+    { id: 'assignments', label: 'Assignments', icon: ArrowLeftRight, iconColor: 'text-violet-400', group: 'core' },
+    { id: 'maintenance', label: 'Maintenance', icon: Wrench, iconColor: 'text-amber-400', group: 'core' },
+    { id: 'licences', label: 'Software Licences', icon: KeyRound, iconColor: 'text-emerald-400', group: 'core' },
+
+    {
+      id: 'tickets',
+      label: 'IT Helpdesk',
+      icon: LifeBuoy,
+      iconColor: 'text-blue-400',
+      group: 'helpdesk_itsm',
+      badge: openTicketCount > 0 ? openTicketCount : undefined,
+    },
+    { id: 'itsm', label: 'ITSM Suite', icon: GitBranch, iconColor: 'text-purple-400', group: 'helpdesk_itsm' },
+    { id: 'sla_contracts', label: 'SLAs & Contracts', icon: FileCheck2, iconColor: 'text-teal-400', group: 'helpdesk_itsm' },
+    { id: 'kb', label: 'Knowledge Base', icon: BookOpen, iconColor: 'text-sky-400', group: 'helpdesk_itsm' },
+
+    { id: 'procurement', label: 'Procurement', icon: ShoppingCart, iconColor: 'text-orange-400', group: 'governance_spend' },
+    { id: 'reports', label: 'Reports & Exports', icon: FileBarChart2, iconColor: 'text-emerald-400', group: 'governance_spend' },
     {
       id: 'notifications',
       label: 'Notifications',
       icon: Bell,
       iconColor: 'text-rose-400',
-      group: 'governance',
+      group: 'governance_spend',
       badge: unreadCount > 0 ? unreadCount : undefined,
     },
-    { id: 'users', label: 'User Management', icon: Shield, iconColor: 'text-cyan-400', group: 'governance', adminOnly: true },
+    { id: 'audit_logs', label: 'Audit Logs', icon: History, iconColor: 'text-slate-300', group: 'governance_spend' },
+
+    { id: 'org_structure', label: 'Organisations & Sites', icon: Building2, iconColor: 'text-indigo-400', group: 'workspace_billing' },
+    { id: 'users', label: 'Users & Access', icon: Shield, iconColor: 'text-cyan-400', group: 'workspace_billing' },
+    { id: 'billing', label: 'Billing & Plans', icon: CreditCard, iconColor: 'text-emerald-400', group: 'workspace_billing' },
+
+    { id: 'super_admin', label: 'Platform Admin', icon: Crown, iconColor: 'text-amber-400', group: 'platform_admin' },
   ];
 
-  const visibleNavItems = navItems.filter(
-    (item) => !item.adminOnly || currentUser.role === 'admin'
-  );
-  const operationsItems = visibleNavItems.filter((i) => i.group === 'operations');
-  const governanceItems = visibleNavItems.filter((i) => i.group === 'governance');
+  const visibleNavItems = navItems.filter((item) => canAccessSection(item.id));
+  const allGroups: Array<{ key: NavGroupKey; title: string; items: NavItem[] }> = [
+    { key: 'core', title: 'Core Operations', items: visibleNavItems.filter((i) => i.group === 'core') },
+    { key: 'helpdesk_itsm', title: 'Helpdesk & ITSM', items: visibleNavItems.filter((i) => i.group === 'helpdesk_itsm') },
+    { key: 'governance_spend', title: 'Governance & Spend', items: visibleNavItems.filter((i) => i.group === 'governance_spend') },
+    { key: 'workspace_billing', title: 'Workspace & Billing', items: visibleNavItems.filter((i) => i.group === 'workspace_billing') },
+    { key: 'platform_admin', title: 'Platform Admin', items: visibleNavItems.filter((i) => i.group === 'platform_admin') },
+  ];
+  const navGroups = allGroups.filter((g) => g.items.length > 0);
 
   const initials = currentUser.name
     .split(' ')
@@ -382,6 +669,15 @@ export default function App() {
     .join('')
     .slice(0, 2)
     .toUpperCase();
+
+  const roleLabel =
+    tenantCtx?.isSuperAdmin
+      ? 'Platform Super Admin'
+      : tenantCtx?.membership.role
+        ? tenantCtx.membership.role.replace(/_/g, ' ')
+        : currentUser.role === 'admin'
+          ? 'Administrator'
+          : 'IT Staff';
 
   const renderNavGroup = (
     items: NavItem[],
@@ -400,7 +696,7 @@ export default function App() {
           aria-current={isActive ? 'page' : undefined}
           className={`group relative w-full flex items-center ${
             collapsed ? 'justify-center px-2.5' : 'justify-between px-3.5'
-          } gap-3 rounded-xl py-2.5 text-[13px] font-medium transition-colors whitespace-nowrap ${
+          } gap-3 rounded-xl py-2 text-[13px] font-medium transition-colors whitespace-nowrap ${
             isActive
               ? 'text-white'
               : 'text-slate-300/80 hover:bg-white/[0.06] hover:text-white'
@@ -428,7 +724,9 @@ export default function App() {
               className={`relative z-10 font-mono text-[11px] font-semibold tabular-nums px-1.5 py-0.5 rounded-md ${
                 isActive
                   ? 'bg-white/20 text-white'
-                  : 'bg-red-600 text-white'
+                  : item.id === 'notifications'
+                    ? 'bg-red-600 text-white'
+                    : 'bg-white/15 text-slate-100'
               }`}
             >
               {item.badge}
@@ -453,9 +751,16 @@ export default function App() {
               <Server className="h-4 w-4" />
             </div>
             {!collapsed && (
-              <span className="font-display text-[17px] font-bold tracking-tight text-white whitespace-nowrap truncate">
-                AssetVault
-              </span>
+              <div className="min-w-0">
+                <div className="font-display text-[16px] font-bold tracking-tight text-white whitespace-nowrap truncate leading-tight">
+                  AssetVault
+                </div>
+                {tenantCtx && (
+                  <div className="text-[10px] text-slate-400 truncate">
+                    {tenantCtx.tenant.type === 'msp' ? 'MSP Console' : tenantCtx.plan.name}
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -484,7 +789,7 @@ export default function App() {
         </div>
 
         {/* Navigation Sections */}
-        <nav className="flex-1 overflow-y-auto px-3.5 py-2 space-y-5">
+        <nav className="flex-1 overflow-y-auto px-3.5 py-2 space-y-4">
           {collapsed && scope === 'desktop' && (
             <div className="flex justify-center pb-1">
               <button
@@ -499,41 +804,34 @@ export default function App() {
             </div>
           )}
 
-          <div>
-            {!collapsed && (
-              <div className="px-3.5 mb-2 text-[11px] font-semibold tracking-wide text-slate-500">
-                Core Operations
+          {navGroups.map((group) => (
+            <div key={group.key}>
+              {!collapsed && (
+                <div className="px-3.5 mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                  {group.title}
+                </div>
+              )}
+              <div className="space-y-0.5">
+                {renderNavGroup(group.items, scope, collapsed)}
               </div>
-            )}
-            <div className="space-y-1">
-              {renderNavGroup(operationsItems, scope, collapsed)}
             </div>
-          </div>
+          ))}
 
-          <div>
-            {!collapsed && (
-              <div className="px-3.5 mb-2 text-[11px] font-semibold tracking-wide text-slate-500">
-                Governance &amp; Reports
-              </div>
-            )}
-            <div className="space-y-1">
-              {renderNavGroup(governanceItems, scope, collapsed)}
-            </div>
-
-            {!collapsed && (
+          {!collapsed && (
+            <div className="pt-1">
               <button
                 type="button"
                 onClick={() => {
                   setMobileMenuOpen(false);
                   setSupportOpen(true);
                 }}
-                className="mt-1 w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13px] font-medium text-slate-300/80 hover:bg-white/[0.06] hover:text-white transition-colors whitespace-nowrap"
+                className="w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-[13px] font-medium text-slate-300/80 hover:bg-white/[0.06] hover:text-white transition-colors whitespace-nowrap"
               >
                 <HelpCircle className="h-4 w-4 shrink-0 text-sky-400" />
                 <span>Help &amp; Shortcuts</span>
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </nav>
 
         {/* Bottom Appearance & Profile Section */}
@@ -557,8 +855,8 @@ export default function App() {
                   <div className="truncate text-xs font-semibold text-white">
                     {currentUser.name}
                   </div>
-                  <div className="truncate text-[11px] text-slate-400">
-                    {currentUser.role === 'admin' ? 'Administrator' : 'IT Staff'}
+                  <div className="truncate text-[11px] text-slate-400 capitalize">
+                    {roleLabel}
                   </div>
                 </div>
               )}
@@ -581,6 +879,20 @@ export default function App() {
   };
 
   const meta = SECTION_META[activeSection];
+  const sub = tenantCtx?.subscription;
+  const trialDaysLeft = sub?.trialEndsAt
+    ? Math.max(
+        0,
+        Math.ceil(
+          (new Date(sub.trialEndsAt).getTime() - Date.now()) / 86400_000
+        )
+      )
+    : 0;
+  const showSubscriptionBanner =
+    tenantCtx &&
+    (tenantCtx.isReadOnlyGraceOrExpired ||
+      sub?.status === 'trialing' ||
+      sub?.status === 'grace_period');
 
   return (
     <MotionConfig reducedMotion="user">
@@ -604,7 +916,7 @@ export default function App() {
         {/* Collapsible Desktop Sidebar */}
         <aside
           className={`hidden lg:block shrink-0 border-r border-[var(--av-border)] sticky top-0 h-screen transition-[width] duration-200 ease-out ${
-            sidebarCollapsed ? 'w-[72px]' : 'w-[252px]'
+            sidebarCollapsed ? 'w-[72px]' : 'w-[258px]'
           }`}
         >
           {renderSidebar('desktop')}
@@ -638,9 +950,9 @@ export default function App() {
         {/* Main Content Viewport */}
         <div className="flex-1 min-w-0 flex flex-col">
           {/* Top Navigation Header */}
-          <header className="sticky top-0 z-30 h-16 border-b border-[var(--av-border)] bg-[var(--av-header-bg)] backdrop-blur-md px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4 transition-colors duration-200">
-            {/* Left: Mobile Drawer Button + Prominent Rounded Global Search + Breadcrumb */}
-            <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
+          <header className="sticky top-0 z-30 h-16 border-b border-[var(--av-border)] bg-[var(--av-header-bg)] backdrop-blur-md px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3 transition-colors duration-200">
+            {/* Left: Mobile Drawer Button + Global Search + Breadcrumb */}
+            <div className="flex items-center gap-3 min-w-0 flex-1">
               <button
                 type="button"
                 onClick={() => setMobileMenuOpen(true)}
@@ -650,16 +962,15 @@ export default function App() {
                 <Menu className="h-4 w-4" />
               </button>
 
-              {/* Prominent Rounded Search Trigger (matching reference) */}
               <button
                 type="button"
                 onClick={() => setSearchOpen(true)}
-                className="inline-flex items-center justify-between gap-3 rounded-full border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-2 text-xs text-[var(--av-text-subtle)] shadow-[var(--av-card-shadow)] hover:border-[var(--av-accent)]/40 hover:text-[var(--av-text)] transition-all w-full max-w-xs sm:max-w-sm"
+                className="inline-flex items-center justify-between gap-3 rounded-full border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-2 text-xs text-[var(--av-text-subtle)] shadow-[var(--av-card-shadow)] hover:border-[var(--av-accent)]/40 hover:text-[var(--av-text)] transition-all w-full max-w-[260px] sm:max-w-xs"
                 aria-label="Search workspace"
               >
-                <span className="flex items-center gap-2.5 min-w-0">
+                <span className="flex items-center gap-2 min-w-0">
                   <Search className="h-3.5 w-3.5 text-[#3B66F6] shrink-0" />
-                  <span className="truncate">Search assets, employees, tags...</span>
+                  <span className="truncate">Search assets, staff, modules...</span>
                 </span>
                 <kbd className="hidden sm:inline-block rounded-md border border-[var(--av-border)] bg-[var(--av-surface-muted)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--av-text-subtle)] shrink-0">
                   ⌘K
@@ -677,10 +988,48 @@ export default function App() {
               </div>
             </div>
 
-            {/* Right: Light/Dark Toggle, Notifications Popover, Help, Profile Dropdown */}
+            {/* Right: Workspace/Client Switchers, Theme Toggle, Alerts, Help, Profile */}
             <div className="flex items-center gap-2 shrink-0">
+              {/* Tenant Workspace Switcher (multi-tenant members / super admin) */}
+              {tenantCtx && tenantCtx.availableTenants.length > 1 && (
+                <select
+                  aria-label="Switch workspace tenant"
+                  value={tenantCtx.tenant.id}
+                  onChange={(e) => handleSwitchTenant(e.target.value)}
+                  className="hidden md:block max-w-[165px] rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-2.5 py-1.5 text-xs font-semibold text-[var(--av-text)] focus:border-[var(--av-accent)] focus:outline-none"
+                >
+                  {tenantCtx.availableTenants.map((entry) => (
+                    <option key={entry.tenant.id} value={entry.tenant.id}>
+                      {entry.tenant.name} ({entry.tenant.type.toUpperCase()})
+                    </option>
+                  ))}
+                </select>
+              )}
 
-              {/* Light / Dark Toggle */}
+              {/* MSP / Client Organisation Scope Switcher */}
+              {tenantCtx &&
+                (tenantCtx.tenant.type === 'msp' ||
+                  tenantCtx.availableOrgs.length > 1) && (
+                  <select
+                    aria-label="Switch client organisation"
+                    value={
+                      tenantCtx.isAllOrgsView ? 'all' : tenantCtx.activeOrg.id
+                    }
+                    onChange={(e) => handleSwitchOrg(e.target.value)}
+                    className="hidden sm:block max-w-[180px] rounded-lg border border-[#3B66F6]/30 bg-[#3B66F6]/10 px-2.5 py-1.5 text-xs font-semibold text-[#3B66F6] dark:text-sky-300 focus:border-[var(--av-accent)] focus:outline-none"
+                  >
+                    {tenantCtx.tenant.type === 'msp' &&
+                      tenantCtx.membership.orgAccessMode === 'all' && (
+                        <option value="all">All Client Orgs</option>
+                      )}
+                    {tenantCtx.availableOrgs.map((org) => (
+                      <option key={org.id} value={org.id}>
+                        {org.name} ({org.code})
+                      </option>
+                    ))}
+                  </select>
+                )}
+
               <ThemeSwitcher variant="icon" />
 
               {/* Notifications Dropdown */}
@@ -734,11 +1083,19 @@ export default function App() {
                             <button
                               key={n.id}
                               type="button"
-                              onClick={() =>
-                                n.entity_type === 'maintenance'
-                                  ? navigateTo('maintenance')
-                                  : handleOpenAsset(n.asset_id)
-                              }
+                              onClick={() => {
+                                if (n.entity_type === 'maintenance') {
+                                  navigateTo('maintenance');
+                                } else if (n.entity_type === 'ticket') {
+                                  navigateTo('tickets');
+                                } else if (n.entity_type === 'licence') {
+                                  navigateTo('licences');
+                                } else if (n.entity_type === 'subscription') {
+                                  navigateTo('billing');
+                                } else {
+                                  handleOpenAsset(n.asset_id);
+                                }
+                              }}
                               className="w-full px-4 py-3 text-left hover:bg-[var(--av-surface-hover)] transition-colors"
                             >
                               <div className="flex items-center justify-between gap-2">
@@ -767,7 +1124,6 @@ export default function App() {
                 </AnimatePresence>
               </div>
 
-              {/* Help / Support Access */}
               <button
                 type="button"
                 onClick={() => setSupportOpen(true)}
@@ -806,7 +1162,7 @@ export default function App() {
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 4, scale: 0.98 }}
                       transition={{ duration: 0.14 }}
-                      className="absolute right-0 mt-2 w-60 rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-xl overflow-hidden z-40"
+                      className="absolute right-0 mt-2 w-64 rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-xl overflow-hidden z-40"
                     >
                       <div className="border-b border-[var(--av-border-subtle)] px-4 py-3">
                         <div className="text-xs font-semibold text-[var(--av-text)] truncate">
@@ -815,9 +1171,8 @@ export default function App() {
                         <div className="text-[11px] text-[var(--av-text-subtle)] truncate">
                           {currentUser.email}
                         </div>
-                        <div className="mt-1 text-[11px] font-medium text-[var(--av-accent)]">
-                          {currentUser.role === 'admin' ? 'Administrator' : 'IT Staff'} ·{' '}
-                          {currentUser.department}
+                        <div className="mt-1 text-[11px] font-medium text-[var(--av-accent)] capitalize truncate">
+                          {roleLabel} · {currentUser.department}
                         </div>
                       </div>
 
@@ -837,6 +1192,39 @@ export default function App() {
                           </span>
                         </button>
 
+                        {canAccessSection('billing') && (
+                          <button
+                            type="button"
+                            onClick={() => navigateTo('billing')}
+                            className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                          >
+                            <CreditCard className="h-3.5 w-3.5 text-emerald-500" />
+                            <span>Billing &amp; Plan ({tenantCtx?.plan.name || 'Plan'})</span>
+                          </button>
+                        )}
+
+                        {canAccessSection('users') && (
+                          <button
+                            type="button"
+                            onClick={() => navigateTo('users')}
+                            className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                          >
+                            <Shield className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
+                            <span>Users &amp; Access</span>
+                          </button>
+                        )}
+
+                        {tenantCtx?.isSuperAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => navigateTo('super_admin')}
+                            className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                          >
+                            <Crown className="h-3.5 w-3.5 text-amber-500" />
+                            <span>Platform Admin Console</span>
+                          </button>
+                        )}
+
                         <button
                           type="button"
                           onClick={() => {
@@ -846,19 +1234,8 @@ export default function App() {
                           className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
                         >
                           <HelpCircle className="h-3.5 w-3.5 text-[#1AB394]" />
-                          <span>Help & Shortcuts</span>
+                          <span>Help &amp; Shortcuts</span>
                         </button>
-
-                        {currentUser.role === 'admin' && (
-                          <button
-                            type="button"
-                            onClick={() => navigateTo('users')}
-                            className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
-                          >
-                            <Shield className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
-                            <span>User Management</span>
-                          </button>
-                        )}
                       </div>
 
                       <div className="border-t border-[var(--av-border-subtle)] p-1.5">
@@ -878,11 +1255,44 @@ export default function App() {
             </div>
           </header>
 
+          {/* Subscription Trial / Grace / Read-Only Banner */}
+          {showSubscriptionBanner && (
+            <div
+              className={`border-b px-4 sm:px-6 lg:px-8 py-2 text-xs flex flex-wrap items-center justify-between gap-2 ${
+                tenantCtx.isReadOnlyGraceOrExpired
+                  ? 'border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 text-red-800 dark:text-red-200'
+                  : sub?.status === 'grace_period'
+                    ? 'border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                    : 'border-sky-200 dark:border-sky-500/30 bg-sky-50 dark:bg-sky-500/10 text-sky-900 dark:text-sky-200'
+              }`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                <span className="font-medium">
+                  {tenantCtx.isReadOnlyGraceOrExpired
+                    ? `Subscription ${sub?.status}. Workspace is in read-only mode until payment is renewed.`
+                    : sub?.status === 'grace_period'
+                      ? `Subscription is in grace period. Renew in Paystack GH₵ billing to prevent read-only lock.`
+                      : `${tenantCtx.plan.name} free trial active (${trialDaysLeft} day${trialDaysLeft === 1 ? '' : 's'} remaining).`}
+                </span>
+              </div>
+              {canAccessSection('billing') && (
+                <button
+                  type="button"
+                  onClick={() => navigateTo('billing')}
+                  className="rounded-md bg-[var(--av-surface)] border border-[var(--av-border)] px-2.5 py-1 text-[11px] font-semibold text-[var(--av-text)] hover:bg-[var(--av-surface-hover)] transition-colors shrink-0"
+                >
+                  Manage GH₵ Plan
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Active Module Viewport */}
           <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1480px] w-full mx-auto">
             <AnimatePresence mode="wait">
               <motion.div
-                key={activeSection}
+                key={`${activeSection}-${tenantCtx?.tenant.id || 'default'}-${tenantCtx?.isAllOrgsView ? 'all' : tenantCtx?.activeOrg.id || 'org'}`}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -4 }}
@@ -893,6 +1303,7 @@ export default function App() {
                     summary={dashboardSummary}
                     assets={assets}
                     loading={dataLoading && !dashboardSummary}
+                    tenantCtx={tenantCtx}
                     onNavigate={navigateTo}
                     onOpenAsset={handleOpenAsset}
                   />
@@ -902,6 +1313,7 @@ export default function App() {
                   <AssetsView
                     assets={assets}
                     userRole={currentUser.role}
+                    tenantCtx={tenantCtx}
                     selectedAssetId={selectedAssetId}
                     onClearSelectedAsset={() => setSelectedAssetId(null)}
                     onRefresh={handleRefresh}
@@ -914,6 +1326,7 @@ export default function App() {
                       setMaintPreselectAsset(asset);
                       setActiveSection('maintenance');
                     }}
+                    onPlanBlocked={handlePlanBlocked}
                   />
                 )}
 
@@ -950,6 +1363,7 @@ export default function App() {
                   <MaintenanceView
                     maintenanceLogs={maintenanceLogs}
                     assets={assets}
+                    tickets={tickets}
                     userRole={currentUser.role}
                     preselectedAsset={maintPreselectAsset}
                     onClearPreselectedAsset={() => setMaintPreselectAsset(null)}
@@ -958,11 +1372,69 @@ export default function App() {
                   />
                 )}
 
+                {activeSection === 'licences' && (
+                  <SoftwareLicencesView
+                    tenantCtx={tenantCtx}
+                    onRefresh={handleRefresh}
+                    onToast={pushToast}
+                    onPlanBlocked={handlePlanBlocked}
+                  />
+                )}
+
+                {activeSection === 'tickets' && (
+                  <HelpdeskView
+                    assets={assets}
+                    users={users}
+                    currentUserId={currentUser.id}
+                    tenantCtx={tenantCtx}
+                    onRefresh={handleRefresh}
+                    onToast={pushToast}
+                    onPlanBlocked={handlePlanBlocked}
+                  />
+                )}
+
+                {activeSection === 'itsm' && (
+                  <ItsmView
+                    tenantCtx={tenantCtx}
+                    onToast={pushToast}
+                    onPlanBlocked={handlePlanBlocked}
+                  />
+                )}
+
+                {activeSection === 'sla_contracts' && (
+                  <SlaAndContractsView
+                    tenantCtx={tenantCtx}
+                    onRefresh={handleRefresh}
+                    onToast={pushToast}
+                    onPlanBlocked={handlePlanBlocked}
+                  />
+                )}
+
+                {activeSection === 'kb' && (
+                  <KnowledgeBaseView
+                    tenantCtx={tenantCtx}
+                    onToast={pushToast}
+                    onPlanBlocked={handlePlanBlocked}
+                  />
+                )}
+
+                {activeSection === 'procurement' && (
+                  <ProcurementView
+                    tenantCtx={tenantCtx}
+                    onRefresh={handleRefresh}
+                    onToast={pushToast}
+                    onPlanBlocked={handlePlanBlocked}
+                  />
+                )}
+
                 {activeSection === 'reports' && (
                   <ReportsView
                     assets={assets}
                     assignments={assignments}
                     maintenanceLogs={maintenanceLogs}
+                    tickets={tickets}
+                    licences={licences}
+                    purchaseOrders={purchaseOrders}
                     onToast={pushToast}
                   />
                 )}
@@ -973,15 +1445,46 @@ export default function App() {
                     onRefresh={handleRefresh}
                     onOpenAsset={handleOpenAsset}
                     onOpenMaintenance={() => navigateTo('maintenance')}
+                    onNavigate={navigateTo}
                     onToast={pushToast}
                   />
                 )}
 
-                {activeSection === 'users' && currentUser.role === 'admin' && (
+                {activeSection === 'audit_logs' && (
+                  <AuditLogsView tenantCtx={tenantCtx} onToast={pushToast} />
+                )}
+
+                {activeSection === 'org_structure' && (
+                  <OrgStructureView
+                    tenantCtx={tenantCtx}
+                    onRefresh={handleRefresh}
+                    onToast={pushToast}
+                    onPlanBlocked={handlePlanBlocked}
+                  />
+                )}
+
+                {activeSection === 'users' && (
                   <UsersView
                     users={users}
                     currentUserId={currentUser.id}
+                    tenantCtx={tenantCtx}
                     onRefresh={handleRefresh}
+                    onToast={pushToast}
+                    onPlanBlocked={handlePlanBlocked}
+                  />
+                )}
+
+                {activeSection === 'billing' && (
+                  <SubscriptionBillingView
+                    tenantCtx={tenantCtx}
+                    onRefreshContext={handleRefresh}
+                    onToast={pushToast}
+                  />
+                )}
+
+                {activeSection === 'super_admin' && tenantCtx?.isSuperAdmin && (
+                  <SuperAdminView
+                    onRefreshContext={handleRefresh}
                     onToast={pushToast}
                   />
                 )}
@@ -990,6 +1493,83 @@ export default function App() {
           </main>
         </div>
 
+        {/* Plan Quota / Feature Gate Upgrade Modal */}
+        <AnimatePresence>
+          {blockedModalErr && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="plan-blocked-title"
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.96, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.96, y: 6 }}
+                transition={{ duration: 0.16 }}
+                className="w-full max-w-md rounded-2xl border border-[var(--av-border)] bg-[var(--av-surface)] p-6 shadow-2xl space-y-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 shrink-0">
+                      <Lock className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3
+                        id="plan-blocked-title"
+                        className="font-display text-base font-semibold text-[var(--av-text)]"
+                      >
+                        {blockedModalErr.code === 'SUBSCRIPTION_READ_ONLY'
+                          ? 'Subscription Renewal Required'
+                          : blockedModalErr.code === 'QUOTA_EXCEEDED'
+                            ? 'Plan Quota Limit Reached'
+                            : 'Enterprise / Upgraded Feature'}
+                      </h3>
+                      <p className="text-xs text-[var(--av-text-subtle)]">
+                        Current plan: {tenantCtx?.plan.name || 'Starter'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBlockedModalErr(null)}
+                    className="rounded-lg p-1.5 text-[var(--av-text-subtle)] hover:bg-[var(--av-surface-hover)]"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <p className="text-sm text-[var(--av-text-muted)] leading-relaxed">
+                  {blockedModalErr.message}
+                </p>
+
+                <div className="flex items-center justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setBlockedModalErr(null)}
+                    className="rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)]"
+                  >
+                    Close
+                  </button>
+                  {canAccessSection('billing') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBlockedModalErr(null);
+                        navigateTo('billing');
+                      }}
+                      className="inline-flex items-center gap-2 rounded-lg bg-[#3B66F6] px-4 py-2 text-xs font-semibold text-white hover:bg-[#2F54D4] transition-colors"
+                    >
+                      <CreditCard className="h-3.5 w-3.5" />
+                      View GH₵ Plans &amp; Upgrade
+                    </button>
+                  )}
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
         <GlobalSearchModal
           open={searchOpen}
           onClose={() => setSearchOpen(false)}
@@ -997,6 +1577,8 @@ export default function App() {
           employees={employees}
           maintenanceLogs={maintenanceLogs}
           userRole={currentUser.role}
+          permissions={tenantCtx?.permissions ?? []}
+          isSuperAdmin={Boolean(tenantCtx?.isSuperAdmin)}
           onOpenAsset={handleOpenAsset}
           onNavigate={navigateTo}
         />

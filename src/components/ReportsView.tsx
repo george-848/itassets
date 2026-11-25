@@ -11,16 +11,27 @@ import {
   type AssetAssignment,
   type MaintenanceLog,
 } from '../types/itams.ts';
-import { formatCurrencyExact } from './StatusText.tsx';
+import type { PurchaseOrder, SoftwareLicence, Ticket } from '../types/saas.ts';
+import { formatCurrencyExact, formatGhsExact } from './StatusText.tsx';
 import { DataPagination } from './ui/DataPagination.tsx';
 import { EmptyState } from './ui/EmptyState.tsx';
 
-type ReportType = 'inventory' | 'assigned' | 'maintenance' | 'warranty';
+type ReportType =
+  | 'inventory'
+  | 'assigned'
+  | 'maintenance'
+  | 'warranty'
+  | 'tickets'
+  | 'licences'
+  | 'procurement';
 
 interface ReportsViewProps {
   assets: Asset[];
   assignments: AssetAssignment[];
   maintenanceLogs: MaintenanceLog[];
+  tickets?: Ticket[];
+  licences?: SoftwareLicence[];
+  purchaseOrders?: PurchaseOrder[];
   onToast: (type: 'success' | 'error', message: string) => void;
 }
 
@@ -31,6 +42,9 @@ export function ReportsView({
   assets,
   assignments,
   maintenanceLogs,
+  tickets = [],
+  licences = [],
+  purchaseOrders = [],
   onToast,
 }: ReportsViewProps) {
   const [reportType, setReportType] = useState<ReportType>('inventory');
@@ -174,6 +188,114 @@ export function ReportsView({
       };
     }
 
+    if (reportType === 'tickets') {
+      const breachedCount = tickets.filter((t) => t.slaBreached).length;
+      return {
+        title: 'Helpdesk & SLA Compliance Report',
+        subtitle: 'Support ticket queue, assignees, and SLA status',
+        sheetName: 'Helpdesk SLA',
+        filename: `AssetVault_Helpdesk_SLA_${new Date().toISOString().slice(0, 10)}`,
+        columns: [
+          'Ticket #',
+          'Subject',
+          'Category',
+          'Priority',
+          'Status',
+          'Requester',
+          'Assignee',
+          'Asset Tag',
+          'SLA Status',
+          'Created',
+        ],
+        rows: tickets.map((t) => [
+          t.ticketNumber,
+          t.subject,
+          t.category,
+          t.priority,
+          t.status,
+          t.requesterName,
+          t.assigneeName || 'Unassigned',
+          t.assetTag || '—',
+          t.slaBreached ? 'BREACHED' : 'On Track',
+          t.createdAt.slice(0, 10),
+        ]),
+        summaryLines: [
+          `Total Tickets: ${tickets.length}`,
+          `SLA Breached: ${breachedCount}`,
+        ],
+      };
+    }
+
+    if (reportType === 'licences') {
+      const annualSpend = licences.reduce((s, l) => s + Number(l.costPerYearGhs || 0), 0);
+      return {
+        title: 'Software Licences & Seat Allocation Report',
+        subtitle: 'Active seats, renewal dates, and GH₵ annual spend',
+        sheetName: 'Software Licences',
+        filename: `AssetVault_Licences_${new Date().toISOString().slice(0, 10)}`,
+        columns: [
+          'Software',
+          'Vendor',
+          'Type',
+          'Assigned / Total Seats',
+          'Status',
+          'Expiry Date',
+          'Auto Renew',
+          'Annual Cost (GH₵)',
+        ],
+        rows: licences.map((l) => [
+          l.softwareName,
+          l.vendor,
+          l.licenceType,
+          `${l.assignedSeats} / ${l.totalSeats}`,
+          l.status,
+          l.expiryDate,
+          l.autoRenew ? 'Yes' : 'No',
+          formatGhsExact(l.costPerYearGhs),
+        ]),
+        summaryLines: [
+          `Tracked Titles: ${licences.length}`,
+          `Annual Licence Spend: ${formatGhsExact(annualSpend)}`,
+        ],
+      };
+    }
+
+    if (reportType === 'procurement') {
+      const totalSpend = purchaseOrders.reduce((s, p) => s + Number(p.totalCostGhs || 0), 0);
+      return {
+        title: 'IT Procurement & Purchase Order Spend Report',
+        subtitle: 'Vendor orders, delivery status, and GH₵ total spend',
+        sheetName: 'Procurement POs',
+        filename: `AssetVault_Procurement_${new Date().toISOString().slice(0, 10)}`,
+        columns: [
+          'PO Number',
+          'Item',
+          'Category',
+          'Vendor',
+          'Qty',
+          'Unit Cost (GH₵)',
+          'Total Cost (GH₵)',
+          'Expected Delivery',
+          'Status',
+        ],
+        rows: purchaseOrders.map((p) => [
+          p.poNumber,
+          p.itemName,
+          p.category,
+          p.vendorName,
+          p.quantity,
+          formatGhsExact(p.unitCostGhs),
+          formatGhsExact(p.totalCostGhs),
+          p.expectedDeliveryDate,
+          p.status,
+        ]),
+        summaryLines: [
+          `Purchase Orders: ${purchaseOrders.length}`,
+          `Total PO Value: ${formatGhsExact(totalSpend)}`,
+        ],
+      };
+    }
+
     const warrantyItems = assets
       .filter((a) => a.status !== 'Retired')
       .map((a) => {
@@ -236,6 +358,9 @@ export function ReportsView({
     assets,
     assignments,
     maintenanceLogs,
+    tickets,
+    licences,
+    purchaseOrders,
     categoryFilter,
     statusFilter,
     deptFilter,
@@ -288,6 +413,9 @@ export function ReportsView({
                 ['assigned', 'Assigned Assets'],
                 ['maintenance', 'Maintenance & Costs'],
                 ['warranty', 'Warranty & Replacement'],
+                ['tickets', 'Helpdesk & SLA'],
+                ['licences', 'Software Licences'],
+                ['procurement', 'Procurement Spend'],
               ] as const
             ).map(([key, label]) => {
               const active = reportType === key;
@@ -296,7 +424,7 @@ export function ReportsView({
                   key={key}
                   type="button"
                   onClick={() => setReportType(key)}
-                  className={`relative px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  className={`relative px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     active
                       ? 'text-[var(--av-text)]'
                       : 'text-[var(--av-text-muted)] hover:text-[var(--av-text)]'

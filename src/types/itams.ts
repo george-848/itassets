@@ -61,6 +61,9 @@ export interface User {
   status: 'active' | 'pending' | 'inactive';
   created_at: string;
   last_login: string | null;
+  email_verified?: boolean;
+  mfa_enabled?: boolean;
+  is_super_admin?: boolean;
 }
 
 export interface Employee {
@@ -75,6 +78,21 @@ export interface Employee {
   status: 'active' | 'inactive';
   created_at: string;
   assigned_count?: number;
+  tenant_id?: string;
+  org_id?: string;
+  location_id?: string;
+  department_id?: string;
+}
+
+export interface AssetSpecs {
+  cpu?: string;
+  ram?: string;
+  storage?: string;
+  os?: string;
+  ip_address?: string;
+  mac_address?: string;
+  hostname?: string;
+  custom_attributes?: Record<string, string>;
 }
 
 export interface Asset {
@@ -98,6 +116,24 @@ export interface Asset {
   assigned_employee_name?: string | null;
   assigned_employee_department?: string | null;
   assigned_employee_code?: string | null;
+  // Multi-tenant & Extended Enterprise ITAM fields
+  tenant_id?: string;
+  org_id?: string;
+  org_name?: string;
+  location_id?: string;
+  department_id?: string;
+  vendor_id?: string | null;
+  purchase_order_id?: string | null;
+  barcode_value?: string;
+  qr_payload?: string;
+  specs?: AssetSpecs;
+  depreciation_method?: 'straight_line' | 'declining_balance' | 'none';
+  useful_life_years?: number;
+  salvage_value?: number;
+  disposal_status?: 'none' | 'pending_approval' | 'approved' | 'disposed';
+  disposal_reason?: string;
+  disposal_date?: string | null;
+  disposal_approved_by?: string | null;
 }
 
 export interface AssetAssignment {
@@ -124,6 +160,8 @@ export interface AssetAssignment {
   employee_department?: string;
   employee_email?: string;
   assigned_by_name?: string;
+  tenant_id?: string;
+  org_id?: string;
 }
 
 export interface MaintenanceLog {
@@ -145,12 +183,19 @@ export interface MaintenanceLog {
   asset_brand?: string;
   asset_model?: string;
   recorded_by_name?: string;
+  tenant_id?: string;
+  org_id?: string;
+  ticket_id?: string | null;
+  downtime_minutes?: number;
 }
 
 export type NotificationType =
   | 'expiring_warranty'
   | 'overdue_maintenance'
-  | 'replacement_due';
+  | 'replacement_due'
+  | 'sla_breach'
+  | 'licence_expiry'
+  | 'subscription_alert';
 
 export interface SystemNotification {
   id: string;
@@ -158,7 +203,7 @@ export interface SystemNotification {
   severity: 'critical' | 'warning' | 'info';
   title: string;
   description: string;
-  entity_type: 'asset' | 'maintenance';
+  entity_type: 'asset' | 'maintenance' | 'ticket' | 'licence' | 'subscription';
   entity_id: string;
   asset_id: string;
   asset_tag: string;
@@ -177,10 +222,15 @@ export interface DashboardSummary {
     retiredOrDamaged: number;
     activeEmployees: number;
     openMaintenance: number;
+    openTickets?: number;
+    slaBreachedTickets?: number;
+    activeLicences?: number;
+    activeContracts?: number;
   };
   financials: {
     totalAssetValue: number;
     totalMaintenanceCost: number;
+    annualLicenceSpend?: number;
   };
   categoryBreakdown: Array<{
     category: string;
