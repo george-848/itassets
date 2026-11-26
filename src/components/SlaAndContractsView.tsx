@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Clock, FileCheck2, Play, Plus, ShieldCheck, X } from 'lucide-react';
+import { Clock, FileCheck2, Paperclip, Play, Plus, ShieldCheck, X } from 'lucide-react';
 import { api, ApiError, type ExtendedTenantContext } from '../lib/api.ts';
 import type { ServiceContract, SlaPolicy, TicketPriority } from '../types/saas.ts';
+import { AttachmentsPanel } from './AttachmentsPanel.tsx';
 import { formatGhsExact } from './StatusText.tsx';
 import { EmptyState } from './ui/EmptyState.tsx';
 
@@ -55,10 +56,13 @@ export function SlaAndContractsView({
     new Date(Date.now() + 365 * 86400_000).toISOString().slice(0, 10)
   );
   const [ctrAutoRenew, setCtrAutoRenew] = useState(true);
+  const [ctrAttachmentsTarget, setCtrAttachmentsTarget] =
+    useState<ServiceContract | null>(null);
 
+  const isReadOnly = Boolean(tenantCtx?.isReadOnlyGraceOrExpired);
   const perms = tenantCtx?.permissions ?? [];
-  const canManageSla = perms.includes('sla.manage');
-  const canManageContracts = perms.includes('contracts.manage');
+  const canManageSla = !isReadOnly && perms.includes('sla.manage');
+  const canManageContracts = !isReadOnly && perms.includes('contracts.manage');
 
   const loadAll = async () => {
     setLoading(true);
@@ -173,15 +177,17 @@ export function SlaAndContractsView({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            disabled={sweeping}
-            onClick={handleRunSweep}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3.5 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] disabled:opacity-60"
-          >
-            <Play className="h-3.5 w-3.5 text-emerald-500" />
-            <span>{sweeping ? 'Sweeping...' : 'Run SLA & Expiry Sweep'}</span>
-          </button>
+          {!isReadOnly && (canManageSla || canManageContracts) && (
+            <button
+              type="button"
+              disabled={sweeping}
+              onClick={handleRunSweep}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3.5 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] disabled:opacity-60"
+            >
+              <Play className="h-3.5 w-3.5 text-emerald-500" />
+              <span>{sweeping ? 'Sweeping...' : 'Run SLA & Expiry Sweep'}</span>
+            </button>
+          )}
           {canManageSla && (
             <button
               type="button"
@@ -284,6 +290,7 @@ export function SlaAndContractsView({
                   <th className="py-3 px-4">Term</th>
                   <th className="py-3 px-4 text-right">Annual Value</th>
                   <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4 text-right">Documents</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--av-border-subtle)] text-xs">
@@ -317,6 +324,16 @@ export function SlaAndContractsView({
                       >
                         {c.status}
                       </span>
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setCtrAttachmentsTarget(c)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-2.5 py-1 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)]"
+                      >
+                        <Paperclip className="h-3.5 w-3.5" />
+                        <span>Docs</span>
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -526,6 +543,46 @@ export function SlaAndContractsView({
                   </button>
                 </div>
               </form>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Contract Attachments Modal */}
+      <AnimatePresence>
+        {ctrAttachmentsTarget && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setCtrAttachmentsTarget(null)}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-lg rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-2xl overflow-hidden"
+            >
+              <div className="flex items-center justify-between border-b border-[var(--av-border-subtle)] px-6 py-4">
+                <div>
+                  <h3 className="font-display text-base font-semibold text-[var(--av-text)]">
+                    Contract Documents · {ctrAttachmentsTarget.contractNumber}
+                  </h3>
+                  <p className="text-xs text-[var(--av-text-subtle)]">
+                    {ctrAttachmentsTarget.title} · {ctrAttachmentsTarget.vendorOrProvider}
+                  </p>
+                </div>
+                <button type="button" onClick={() => setCtrAttachmentsTarget(null)}>
+                  <X className="h-4 w-4 text-[var(--av-text-subtle)]" />
+                </button>
+              </div>
+              <div className="p-6">
+                <AttachmentsPanel
+                  entityType="contract"
+                  entityId={ctrAttachmentsTarget.id}
+                  canWrite={canManageContracts}
+                  onToast={onToast}
+                />
+              </div>
             </div>
           </motion.div>
         )}

@@ -9,7 +9,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import { api, ApiError } from '../lib/api.ts';
+import { api, ApiError, type ExtendedTenantContext } from '../lib/api.ts';
 import { generateHandoverPDF } from '../lib/exports.ts';
 import type { Asset, AssetAssignment, Employee } from '../types/itams.ts';
 import { DataPagination } from './ui/DataPagination.tsx';
@@ -19,6 +19,7 @@ interface AssignmentsViewProps {
   assignments: AssetAssignment[];
   assets: Asset[];
   employees: Employee[];
+  tenantCtx?: ExtendedTenantContext | null;
   preselectedAsset: Asset | null;
   preselectedEmployee: Employee | null;
   onClearPreselections: () => void;
@@ -35,12 +36,16 @@ export function AssignmentsView({
   assignments,
   assets,
   employees,
+  tenantCtx,
   preselectedAsset,
   preselectedEmployee,
   onClearPreselections,
   onRefresh,
   onToast,
 }: AssignmentsViewProps) {
+  const isReadOnly = Boolean(tenantCtx?.isReadOnlyGraceOrExpired);
+  const canManage =
+    !isReadOnly && (tenantCtx ? tenantCtx.permissions.includes('assignments.manage') : true);
   const [statusTab, setStatusTab] = useState<'ALL' | 'Active' | 'Returned'>('ALL');
   const [search, setSearch] = useState('');
   const [sortField, setSortField] = useState<SortField>('assigned_date');
@@ -84,16 +89,18 @@ export function AssignmentsView({
 
   useEffect(() => {
     if (preselectedAsset || preselectedEmployee) {
-      setAssetId(preselectedAsset?.id || availableAssets[0]?.id || '');
-      setEmployeeId(preselectedEmployee?.id || activeEmployees[0]?.id || '');
-      setAssignedDate(new Date().toISOString().slice(0, 10));
-      setConditionOut('Good');
-      setAssignNotes('');
-      setAssignError(null);
-      setAssignModalOpen(true);
+      if (canManage) {
+        setAssetId(preselectedAsset?.id || availableAssets[0]?.id || '');
+        setEmployeeId(preselectedEmployee?.id || activeEmployees[0]?.id || '');
+        setAssignedDate(new Date().toISOString().slice(0, 10));
+        setConditionOut('Good');
+        setAssignNotes('');
+        setAssignError(null);
+        setAssignModalOpen(true);
+      }
       onClearPreselections();
     }
-  }, [preselectedAsset, preselectedEmployee]);
+  }, [preselectedAsset, preselectedEmployee, canManage]);
 
   const openAssignModal = () => {
     setAssetId(availableAssets[0]?.id || '');
@@ -260,15 +267,17 @@ export function AssignmentsView({
           </div>
         </div>
 
-        <motion.button
-          type="button"
-          whileTap={{ scale: 0.985 }}
-          onClick={openAssignModal}
-          className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap shrink-0"
-        >
-          <UserPlus className="h-4 w-4" />
-          <span>Assign Asset</span>
-        </motion.button>
+        {canManage && (
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.985 }}
+            onClick={openAssignModal}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap shrink-0"
+          >
+            <UserPlus className="h-4 w-4" />
+            <span>Assign Asset</span>
+          </motion.button>
+        )}
       </div>
 
       {/* Assignments Table */}
@@ -322,8 +331,8 @@ export function AssignmentsView({
                       icon={ArrowLeftRight}
                       title="No asset assignment records match your filter"
                       description="Issue an available asset to an active employee to create an auditable custody handover."
-                      actionLabel={assignments.length === 0 ? 'Assign First Asset' : undefined}
-                      onAction={assignments.length === 0 ? openAssignModal : undefined}
+                      actionLabel={canManage && assignments.length === 0 ? 'Assign First Asset' : undefined}
+                      onAction={canManage && assignments.length === 0 ? openAssignModal : undefined}
                     />
                   </td>
                 </tr>
@@ -384,7 +393,7 @@ export function AssignmentsView({
                           <FileDown className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400" />
                           <span>Handover PDF</span>
                         </button>
-                        {asg.status === 'Active' && (
+                        {canManage && asg.status === 'Active' && (
                           <button
                             type="button"
                             onClick={() => openReturnModal(asg)}

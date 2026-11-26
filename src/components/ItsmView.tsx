@@ -74,10 +74,11 @@ export function ItsmView({ tenantCtx, onToast, onPlanBlocked }: ItsmViewProps) {
   const [srModalItem, setSrModalItem] = useState<ServiceCatalogueItem | null>(null);
   const [srJustification, setSrJustification] = useState('');
 
+  const isReadOnly = Boolean(tenantCtx?.isReadOnlyGraceOrExpired);
   const perms = tenantCtx?.permissions ?? [];
-  const canManage = perms.includes('itsm.manage');
-  const canApprove = perms.includes('itsm.approve');
-  const canRequestService = perms.includes('tickets.create');
+  const canManage = !isReadOnly && perms.includes('itsm.manage');
+  const canApprove = !isReadOnly && perms.includes('itsm.approve');
+  const canRequestService = !isReadOnly && perms.includes('tickets.create');
 
   const loadItsm = async () => {
     setLoading(true);

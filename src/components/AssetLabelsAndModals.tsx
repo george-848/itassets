@@ -4,11 +4,14 @@ import JsBarcode from 'jsbarcode';
 import { jsPDF } from 'jspdf';
 import QRCode from 'qrcode';
 import * as XLSX from 'xlsx';
+import { Html5Qrcode } from 'html5-qrcode';
 import {
   Archive,
   ArrowRightLeft,
+  Camera,
   Download,
   FileSpreadsheet,
+  Keyboard,
   QrCode,
   ScanLine,
   Upload,
@@ -228,14 +231,15 @@ export function AssetLookupModal({
   onToast: (type: 'success' | 'error', message: string) => void;
 }) {
   const [code, setCode] = useState('');
+  const [scanMode, setScanMode] = useState<'manual' | 'camera'>('manual');
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
-  const handleLookup = (e: FormEvent) => {
-    e.preventDefault();
-    const clean = code.trim().toLowerCase();
-    if (!clean) return;
+  const resolveScannedCode = (rawInput: string) => {
+    const clean = rawInput.trim().toLowerCase();
+    if (!clean) return false;
     let parsedTag = clean;
     try {
-      const obj = JSON.parse(code) as { tag?: string; id?: string };
+      const obj = JSON.parse(rawInput) as { tag?: string; id?: string };
       if (obj.tag) parsedTag = obj.tag.toLowerCase();
     } catch {
       // Plain text tag/serial/barcode
@@ -248,12 +252,102 @@ export function AssetLookupModal({
         a.id.toLowerCase() === parsedTag
     );
     if (!match) {
-      onToast('error', `No asset matched tag or serial "${code.trim()}".`);
-      return;
+      onToast('error', `No asset matched tag or serial "${rawInput.trim()}".`);
+      return false;
     }
     onSelectAsset(match.id);
     setCode('');
+    setScanMode('manual');
     onClose();
+    return true;
+  };
+
+  useEffect(() => {
+    if (!open || scanMode !== 'camera') return;
+    let cancelled = false;
+    let started = false;
+    let scanner: Html5Qrcode | null = null;
+    setCameraError(null);
+
+    const safeCleanupScanner = (instance: Html5Qrcode | null, wasStarted: boolean) => {
+      if (!instance) return;
+      try {
+        const shouldStop = wasStarted || Boolean((instance as { isScanning?: boolean }).isScanning);
+        if (shouldStop) {
+          Promise.resolve(instance.stop())
+            .then(() => {
+              try {
+                instance.clear();
+              } catch {
+                // Ignore clear error
+              }
+            })
+            .catch(() => {
+              try {
+                instance.clear();
+              } catch {
+                // Ignore clear error
+              }
+            });
+          return;
+        }
+      } catch {
+        // html5-qrcode throws synchronously if scanner is not running or paused
+      }
+      try {
+        instance.clear();
+      } catch {
+        // Ignore clear error when region is already unmounted or uninitialized
+      }
+    };
+
+    const startScanner = async () => {
+      if (cancelled || !document.getElementById('av-qr-camera-region')) return;
+      try {
+        const instance = new Html5Qrcode('av-qr-camera-region');
+        scanner = instance;
+        await instance.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 220, height: 220 } },
+          (decodedText) => {
+            if (cancelled) return;
+            if (resolveScannedCode(decodedText)) {
+              cancelled = true;
+            }
+          },
+          () => {
+            // Frame read miss ignored
+          }
+        );
+        started = true;
+        if (cancelled) {
+          safeCleanupScanner(instance, true);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setCameraError(
+            err instanceof Error
+              ? `Camera unavailable (${err.message}). Use USB scanner or paste code instead.`
+              : 'Camera permission denied or unavailable on this device.'
+          );
+        }
+      }
+    };
+
+    const timer = window.setTimeout(() => {
+      void startScanner();
+    }, 80);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      safeCleanupScanner(scanner, started);
+    };
+  }, [open, scanMode]);
+
+  const handleLookup = (e: FormEvent) => {
+    e.preventDefault();
+    resolveScannedCode(code);
   };
 
   return (
@@ -282,41 +376,91 @@ export function AssetLookupModal({
               </div>
               <button
                 type="button"
-                onClick={onClose}
+                onClick={() => {
+                  setScanMode('manual');
+                  onClose();
+                }}
                 className="rounded-lg p-1.5 text-[var(--av-text-subtle)] hover:bg-[var(--av-surface-hover)]"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <form onSubmit={handleLookup} className="p-6 space-y-4">
-              <p className="text-xs text-[var(--av-text-muted)] leading-relaxed">
-                Scan with a USB/Bluetooth barcode scanner or paste an Asset Tag, Serial Number, or QR JSON payload to jump directly to the asset record.
-              </p>
-              <input
-                type="text"
-                autoFocus
-                required
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                placeholder="e.g. AV-1001 or C02YM4K9MD6R"
-                className={`${INPUT_CLASS} font-mono`}
-              />
-              <div className="flex justify-end gap-2">
+
+            <div className="px-6 pt-4">
+              <div className="flex items-center gap-1 p-1 rounded-lg bg-[var(--av-surface-muted)]">
                 <button
                   type="button"
-                  onClick={onClose}
-                  className="rounded-lg border border-[var(--av-border)] px-4 py-2 text-xs font-medium text-[var(--av-text-muted)]"
+                  onClick={() => setScanMode('manual')}
+                  className={`flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                    scanMode === 'manual'
+                      ? 'bg-[var(--av-surface)] text-[var(--av-text)] shadow-xs'
+                      : 'text-[var(--av-text-muted)]'
+                  }`}
                 >
-                  Cancel
+                  <Keyboard className="h-3.5 w-3.5" />
+                  <span>USB / Paste Code</span>
                 </button>
                 <button
-                  type="submit"
-                  className="rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)]"
+                  type="button"
+                  onClick={() => setScanMode('camera')}
+                  className={`flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                    scanMode === 'camera'
+                      ? 'bg-[var(--av-surface)] text-[var(--av-text)] shadow-xs'
+                      : 'text-[var(--av-text-muted)]'
+                  }`}
                 >
-                  Open Asset Record
+                  <Camera className="h-3.5 w-3.5" />
+                  <span>Live Camera Scan</span>
                 </button>
               </div>
-            </form>
+            </div>
+
+            {scanMode === 'camera' ? (
+              <div className="p-6 space-y-4">
+                {cameraError ? (
+                  <div className="rounded-lg border border-amber-300/60 dark:border-amber-500/30 bg-amber-50/70 dark:bg-amber-500/10 p-3.5 text-xs text-amber-800 dark:text-amber-300">
+                    {cameraError}
+                  </div>
+                ) : (
+                  <div className="overflow-hidden rounded-xl border border-[var(--av-border)] bg-black">
+                    <div id="av-qr-camera-region" className="w-full min-h-[240px]" />
+                  </div>
+                )}
+                <p className="text-[11px] text-[var(--av-text-subtle)] text-center">
+                  Point your device camera at an AssetVault QR label or barcode to open the hardware record automatically.
+                </p>
+              </div>
+            ) : (
+              <form onSubmit={handleLookup} className="p-6 space-y-4">
+                <p className="text-xs text-[var(--av-text-muted)] leading-relaxed">
+                  Scan with a USB/Bluetooth barcode scanner or paste an Asset Tag, Serial Number, or QR JSON payload to jump directly to the asset record.
+                </p>
+                <input
+                  type="text"
+                  autoFocus
+                  required
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  placeholder="e.g. AV-1001 or C02YM4K9MD6R"
+                  className={`${INPUT_CLASS} font-mono`}
+                />
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="rounded-lg border border-[var(--av-border)] px-4 py-2 text-xs font-medium text-[var(--av-text-muted)]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)]"
+                  >
+                    Open Asset Record
+                  </button>
+                </div>
+              </form>
+            )}
           </motion.div>
         </motion.div>
       )}

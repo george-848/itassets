@@ -69,7 +69,9 @@ export function OrgStructureView({
   >(null);
   const [deleting, setDeleting] = useState(false);
 
-  const canManage = tenantCtx?.permissions.includes('org.manage') ?? false;
+  const isReadOnly = Boolean(tenantCtx?.isReadOnlyGraceOrExpired);
+  const hasMspMode = !tenantCtx || tenantCtx.effectiveFeatures.includes('msp_mode');
+  const canManage = !isReadOnly && (tenantCtx?.permissions.includes('org.manage') ?? false);
 
   const loadOrgs = async () => {
     setLoading(true);
@@ -233,7 +235,7 @@ export function OrgStructureView({
           })}
         </div>
 
-        {canManage && (
+        {canManage && (tab !== 'organisations' || hasMspMode) && (
           <button
             type="button"
             onClick={() => {

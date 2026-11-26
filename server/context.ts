@@ -223,12 +223,17 @@ export function createTenantContextMiddleware(
         (l) => l.tenantId === tenant.id
       ).length;
 
+      const storageUsedBytes = state.attachments
+        .filter((a) => a.tenantId === tenant.id)
+        .reduce((sum, a) => sum + (Number(a.sizeBytes) || 0), 0);
+
       const usage = buildUsageSnapshot({
         assetsCount: tenantAssets.length,
         usersCount: Math.max(1, tenantUsersCount),
         locationsCount: tenantLocationsCount,
         clientOrgsCount: tenantOrgs.length,
         ticketsThisMonth,
+        storageUsedBytes,
       });
 
       const availableTenants: Array<{ tenant: Tenant; role: TenantRole }> = [];

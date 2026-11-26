@@ -1,10 +1,13 @@
 import crypto from 'node:crypto';
 import express from 'express';
+import QRCode from 'qrcode';
 import {
   createAuthMiddleware,
   hashPassword,
+  signMfaChallengeToken,
   signOAuthState,
   signSessionToken,
+  verifyMfaChallengeToken,
   verifyOAuthState,
   verifyPassword,
   type AuthenticatedRequest,
@@ -19,8 +22,16 @@ import {
 } from './context.ts';
 import { createDatabase, type ItamsDatabase } from './db.ts';
 import { checkQuotaExceeded } from './entitlements.ts';
+import { sendTransactionalEmail } from './mailer.ts';
 import { registerSaasRoutes } from './routesSaas.ts';
 import { DEFAULT_ORG_ID, DEFAULT_TENANT_ID, SaasStore } from './saasStore.ts';
+import {
+  buildOtpAuthUri,
+  generateBase32Secret,
+  generateRecoveryCodes,
+  verifyTotpToken,
+} from './totp.ts';
+import { dispatchWebhookEvent } from './webhooks.ts';
 import {
   ASSET_CATEGORIES,
   ASSET_STATUSES,
@@ -96,7 +107,7 @@ export function createApiApp(
 
   app.use(
     express.json({
-      limit: '2mb',
+      limit: '8mb',
       verify: (req, _res, buf) => {
         (req as express.Request & { rawBody?: string }).rawBody =
           buf.toString('utf8');
@@ -154,6 +165,17 @@ export function createApiApp(
         return;
       }
 
+      // Enforce TOTP 2FA when enabled & enrolled for this account
+      const mfaEntry = store.data.mfaSecrets[user.id];
+      if (user.mfa_enabled && mfaEntry?.secret) {
+        res.json({
+          mfaRequired: true,
+          mfaChallengeToken: signMfaChallengeToken({ id: user.id, email: user.email }),
+          email: user.email,
+        });
+        return;
+      }
+
       const now = new Date().toISOString();
       await db.updateUserLastLogin(user.id, now);
       const token = signSessionToken({ id: user.id, email: user.email, role: user.role });
@@ -174,6 +196,65 @@ export function createApiApp(
     } catch (err) {
       console.error('Login error:', err);
       res.status(500).json({ error: 'Authentication service error.' });
+    }
+  });
+
+  app.post('/api/auth/mfa/verify', async (req, res) => {
+    try {
+      const challengeToken = String(req.body?.mfaChallengeToken ?? '').trim();
+      const code = String(req.body?.code ?? '').trim();
+      const challenge = verifyMfaChallengeToken(challengeToken);
+      if (!challenge) {
+        res.status(401).json({ error: '2FA challenge expired or invalid. Please sign in again.' });
+        return;
+      }
+
+      const user = await db.findUserById(challenge.userId);
+      const mfaEntry = store.data.mfaSecrets[challenge.userId];
+      if (!user || user.status !== 'active' || !mfaEntry?.secret) {
+        res.status(401).json({ error: 'Account unavailable for 2FA verification.' });
+        return;
+      }
+
+      const isTotpValid = verifyTotpToken(mfaEntry.secret, code);
+      const normalizedRecovery = code.toUpperCase();
+      const recoveryIdx = mfaEntry.recoveryCodes.findIndex(
+        (rc) => rc === normalizedRecovery
+      );
+
+      if (!isTotpValid && recoveryIdx === -1) {
+        res.status(401).json({ error: 'Invalid 6-digit authenticator code or recovery code.' });
+        return;
+      }
+
+      if (recoveryIdx !== -1) {
+        await store.mutate((s) => {
+          const entry = s.mfaSecrets[user.id];
+          if (entry) {
+            entry.recoveryCodes.splice(recoveryIdx, 1);
+          }
+        });
+      }
+
+      const now = new Date().toISOString();
+      await db.updateUserLastLogin(user.id, now);
+      const token = signSessionToken({ id: user.id, email: user.email, role: user.role });
+
+      res.cookie('av_session', token, {
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+      });
+
+      res.json({
+        token,
+        user: { ...user, last_login: now },
+        engine: db.engine,
+      });
+    } catch (err) {
+      console.error('MFA verify error:', err);
+      res.status(500).json({ error: 'Failed to verify 2FA code.' });
     }
   });
 
@@ -823,14 +904,21 @@ export function createApiApp(
         expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
       });
     });
+
+    const mailResult = await sendTransactionalEmail(store, {
+      tenantId: 'platform',
+      to: user.email,
+      subject: 'AssetVault IT — Password Reset Verification Token',
+      text: `Hello ${user.name},\n\nUse this verification token to reset your AssetVault IT password (expires in 30 minutes):\n\n${resetToken}\n\nIf you did not request this, you can safely ignore this email.`,
+    });
+
     res.json({
       ok: true,
-      message: store.data.platformSettings.smtpConfigured
-        ? 'Password reset email dispatched.'
-        : 'SMTP is in test mode. Use the generated reset token below to complete reset.',
-      testResetToken: store.data.platformSettings.smtpConfigured
-        ? undefined
-        : resetToken,
+      message:
+        mailResult.status === 'sent'
+          ? 'Password reset instructions have been sent to your email.'
+          : 'SMTP is in local test mode. Use the generated reset token below to complete reset.',
+      testResetToken: mailResult.status === 'sent' ? undefined : resetToken,
     });
   });
 
@@ -862,6 +950,80 @@ export function createApiApp(
 
   app.get('/api/auth/me', requireAuth, (req: AuthenticatedRequest, res) => {
     res.json({ user: req.authUser, engine: db.engine });
+  });
+
+  app.get('/api/auth/mfa/status', requireAuth, (req: AuthenticatedRequest, res) => {
+    const entry = store.data.mfaSecrets[req.authUser!.id];
+    res.json({
+      enabled: Boolean(req.authUser!.mfa_enabled && entry?.secret),
+      enrolled: Boolean(entry?.secret),
+      recoveryCodesRemaining: entry?.recoveryCodes.length ?? 0,
+    });
+  });
+
+  app.post('/api/auth/mfa/setup', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = req.authUser!;
+      const secret = generateBase32Secret(20);
+      const otpauthUri = buildOtpAuthUri({ email: user.email, secret });
+      const qrDataUrl = await QRCode.toDataURL(otpauthUri, { width: 220, margin: 1 });
+      const recoveryCodes = generateRecoveryCodes(8);
+
+      // Persist pending secret (user.mfa_enabled stays false until verified in /enable)
+      await store.mutate((s) => {
+        s.mfaSecrets[user.id] = { secret, recoveryCodes };
+      });
+
+      res.json({ secret, qrDataUrl, recoveryCodes });
+    } catch (err) {
+      console.error('MFA setup error:', err);
+      res.status(500).json({ error: 'Failed to initialize 2FA setup.' });
+    }
+  });
+
+  app.post('/api/auth/mfa/enable', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = req.authUser!;
+      const code = String(req.body?.code ?? '').trim();
+      const entry = store.data.mfaSecrets[user.id];
+      if (!entry?.secret) {
+        res.status(400).json({ error: 'Start 2FA setup first before verifying.' });
+        return;
+      }
+      if (!verifyTotpToken(entry.secret, code)) {
+        res.status(400).json({ error: 'Invalid 6-digit verification code. Check your device clock and try again.' });
+        return;
+      }
+      await db.updateUser(user.id, { mfa_enabled: true });
+      res.json({ ok: true, recoveryCodes: entry.recoveryCodes });
+    } catch (err) {
+      console.error('MFA enable error:', err);
+      res.status(500).json({ error: 'Failed to enable 2FA.' });
+    }
+  });
+
+  app.post('/api/auth/mfa/disable', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = req.authUser!;
+      const code = String(req.body?.code ?? '').trim();
+      const entry = store.data.mfaSecrets[user.id];
+      if (user.mfa_enabled && entry?.secret) {
+        const validTotp = verifyTotpToken(entry.secret, code);
+        const validRecovery = entry.recoveryCodes.includes(code.toUpperCase());
+        if (!validTotp && !validRecovery) {
+          res.status(400).json({ error: 'Enter a valid 6-digit authenticator code or recovery code to disable 2FA.' });
+          return;
+        }
+      }
+      await db.updateUser(user.id, { mfa_enabled: false });
+      await store.mutate((s) => {
+        delete s.mfaSecrets[user.id];
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('MFA disable error:', err);
+      res.status(500).json({ error: 'Failed to disable 2FA.' });
+    }
   });
 
   // Register multi-tenant SaaS, Helpdesk, ITSM, Billing, & Super Admin routes
@@ -1130,7 +1292,15 @@ export function createApiApp(
           entityId: assetId,
           summary: `Registered asset ${asset_tag} (${name})`,
         });
-        res.status(201).json({ asset: enrichAssetWithSaasMeta(created, store) });
+        const enriched = enrichAssetWithSaasMeta(created, store);
+        void dispatchWebhookEvent(store, ctx.tenant.id, 'asset.created', {
+          id: enriched.id,
+          asset_tag: enriched.asset_tag,
+          name: enriched.name,
+          category: enriched.category,
+          org_id: enriched.org_id,
+        });
+        res.status(201).json({ asset: enriched });
       } catch (err) {
         console.error('Create asset error:', err);
         res.status(500).json({ error: 'Failed to create asset.' });
@@ -1921,6 +2091,13 @@ export function createApiApp(
           entityType: 'assignment',
           entityId: assignment.id,
           summary: `Issued ${asset.asset_tag} to ${employee.full_name} (${assignment.handover_number})`,
+        });
+        void dispatchWebhookEvent(store, ctx.tenant.id, 'asset.assigned', {
+          assignmentId: assignment.id,
+          assetId: asset.id,
+          assetTag: asset.asset_tag,
+          employeeName: employee.full_name,
+          handoverNumber: assignment.handover_number,
         });
         res.status(201).json({ assignment });
       } catch (err) {
@@ -2901,7 +3078,13 @@ export function createApiApp(
       await store.mutate((s) => {
         s.invitations.unshift(invite);
       });
-      res.status(201).json({ invitation: invite });
+      const mailResult = await sendTransactionalEmail(store, {
+        tenantId: ctx.tenant.id,
+        to: email,
+        subject: `You are invited to ${ctx.tenant.name} on AssetVault IT`,
+        text: `Hello ${name},\n\n${req.authUser!.name} invited you to join ${ctx.tenant.name} as ${invite.role}.\n\nInvitation Token: ${invite.token}\nExpires: ${invite.expiresAt.slice(0, 10)}\n\nOpen AssetVault IT to accept your invitation.`,
+      });
+      res.status(201).json({ invitation: invite, emailDeliveryStatus: mailResult.status });
     }
   );
 

@@ -22,6 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { api, ApiError, type ExtendedTenantContext } from '../lib/api.ts';
+import { getWorkspaceCurrency } from '../lib/currency.ts';
 import { generateAssetMaintenanceSummaryPDF } from '../lib/exports.ts';
 import {
   ASSET_CATEGORIES,
@@ -44,7 +45,9 @@ import {
 } from './AssetLabelsAndModals.tsx';
 import { AssetMaintenanceReportModal } from './AssetMaintenanceReportModal.tsx';
 import { AssetTimeline, buildAssetTimelineEvents } from './AssetTimeline.tsx';
+import { AttachmentsPanel } from './AttachmentsPanel.tsx';
 import { ConfirmDialog } from './ConfirmDialog.tsx';
+import { CustomFieldInputs, CustomFieldValuesDisplay } from './CustomFieldsSection.tsx';
 import {
   AssetStatusIndicator,
   MaintenanceStatusIndicator,
@@ -155,6 +158,7 @@ export function AssetsView({
   const [formStep, setFormStep] = useState<1 | 2>(1);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
   const [form, setForm] = useState<AssetFormState>(EMPTY_FORM);
+  const [customValues, setCustomValues] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -176,15 +180,21 @@ export function AssetsView({
   const [deleteTarget, setDeleteTarget] = useState<Asset | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const isReadOnly = Boolean(tenantCtx?.isReadOnlyGraceOrExpired);
+  const features = tenantCtx?.effectiveFeatures ?? [];
+  const hasBulkImport = !tenantCtx || features.includes('bulk_import');
+  const hasQrBarcode = !tenantCtx || features.includes('qr_barcode');
+  const hasCustomFields = !tenantCtx || features.includes('custom_fields');
+
   const perms = tenantCtx?.permissions;
-  const canCreate = perms ? perms.includes('assets.create') : true;
-  const canUpdate = perms ? perms.includes('assets.update') : true;
-  const canDelete = perms ? perms.includes('assets.delete') : userRole === 'admin';
-  const canImport = perms ? perms.includes('assets.import') : true;
-  const canTransfer = perms ? perms.includes('assets.transfer') : true;
-  const canDispose = perms ? perms.includes('assets.dispose') : userRole === 'admin';
-  const canAssign = perms ? perms.includes('assignments.manage') : true;
-  const canMaint = perms ? perms.includes('maintenance.manage') : true;
+  const canCreate = !isReadOnly && (perms ? perms.includes('assets.create') : true);
+  const canUpdate = !isReadOnly && (perms ? perms.includes('assets.update') : true);
+  const canDelete = !isReadOnly && (perms ? perms.includes('assets.delete') : userRole === 'admin');
+  const canImport = !isReadOnly && hasBulkImport && (perms ? perms.includes('assets.import') : true);
+  const canTransfer = !isReadOnly && (perms ? perms.includes('assets.transfer') : true);
+  const canDispose = !isReadOnly && (perms ? perms.includes('assets.dispose') : userRole === 'admin');
+  const canAssign = !isReadOnly && (perms ? perms.includes('assignments.manage') : true);
+  const canMaint = !isReadOnly && (perms ? perms.includes('maintenance.manage') : true);
 
   useEffect(() => {
     if (selectedAssetId) {
@@ -226,6 +236,7 @@ export function AssetsView({
       purchase_date: today.toISOString().slice(0, 10),
       warranty_expiry: warranty.toISOString().slice(0, 10),
     });
+    setCustomValues({});
     setFormStep(1);
     setFormError(null);
     setFormOpen(true);
@@ -233,6 +244,13 @@ export function AssetsView({
 
   const openEditModal = (asset: Asset) => {
     setEditingAsset(asset);
+    setCustomValues({});
+    if (hasCustomFields) {
+      void api
+        .getCustomFieldValues('asset', asset.id)
+        .then((res) => setCustomValues(res.values))
+        .catch(() => {});
+    }
     setForm({
       asset_tag: asset.asset_tag,
       name: asset.name,
@@ -377,12 +395,17 @@ export function AssetsView({
         useful_life_years: Math.max(1, Number(form.useful_life_years) || 4),
         salvage_value: Math.max(0, Number(form.salvage_value) || 0),
       };
+      let savedAssetId = editingAsset?.id;
       if (editingAsset) {
         await api.updateAsset(editingAsset.id, payload);
         onToast('success', `Asset ${form.asset_tag.toUpperCase()} updated.`);
       } else {
-        await api.createAsset(payload);
+        const created = await api.createAsset(payload);
+        savedAssetId = created.asset.id;
         onToast('success', `Asset ${form.asset_tag.toUpperCase()} added to inventory.`);
+      }
+      if (hasCustomFields && savedAssetId && Object.keys(customValues).length > 0) {
+        await api.saveCustomFieldValues('asset', savedAssetId, customValues).catch(() => {});
       }
       setFormOpen(false);
       await onRefresh();
@@ -478,14 +501,16 @@ export function AssetsView({
           <span className="text-xs font-medium text-[var(--av-text-subtle)] tabular-nums whitespace-nowrap mr-1">
             {filteredAssets.length} of {assets.length} assets
           </span>
-          <button
-            type="button"
-            onClick={() => setLookupOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap shrink-0"
-          >
-            <ScanLine className="h-3.5 w-3.5 text-sky-500" />
-            <span>Scan / Lookup</span>
-          </button>
+          {hasQrBarcode && (
+            <button
+              type="button"
+              onClick={() => setLookupOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap shrink-0"
+            >
+              <ScanLine className="h-3.5 w-3.5 text-sky-500" />
+              <span>Scan / Lookup</span>
+            </button>
+          )}
           {canImport && (
             <button
               type="button"
@@ -571,8 +596,8 @@ export function AssetsView({
                       icon={HardDrive}
                       title="No matching IT assets found"
                       description="Adjust your search filters or register a new hardware unit to populate your inventory."
-                      actionLabel={assets.length === 0 ? 'Register First Asset' : undefined}
-                      onAction={assets.length === 0 ? openCreateModal : undefined}
+                      actionLabel={canCreate && assets.length === 0 ? 'Register First Asset' : undefined}
+                      onAction={canCreate && assets.length === 0 ? openCreateModal : undefined}
                     />
                   </td>
                 </tr>
@@ -650,14 +675,16 @@ export function AssetsView({
                           >
                             <Eye className="h-4 w-4" />
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => setLabelAsset(asset)}
-                            title="QR & Barcode label"
-                            className="p-1.5 rounded-md text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-500/15 transition-colors"
-                          >
-                            <QrCode className="h-4 w-4" />
-                          </button>
+                          {hasQrBarcode && (
+                            <button
+                              type="button"
+                              onClick={() => setLabelAsset(asset)}
+                              title="QR & Barcode label"
+                              className="p-1.5 rounded-md text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-500/15 transition-colors"
+                            >
+                              <QrCode className="h-4 w-4" />
+                            </button>
+                          )}
                           {canAssign && asset.status === 'Available' && (
                             <button
                               type="button"
@@ -942,7 +969,7 @@ export function AssetsView({
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
-                          Purchase Cost (USD) *
+                          Purchase Cost ({getWorkspaceCurrency()}) *
                         </label>
                         <input
                           type="number"
@@ -1146,6 +1173,14 @@ export function AssetsView({
                         className={INPUT_CLASS}
                       />
                     </div>
+
+                    {hasCustomFields && (
+                      <CustomFieldInputs
+                        entityType="asset"
+                        values={customValues}
+                        onChange={setCustomValues}
+                      />
+                    )}
                   </>
                 )}
 
@@ -1260,14 +1295,16 @@ export function AssetsView({
                       <span>Assign Asset</span>
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => setLabelAsset(detailAsset)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
-                  >
-                    <QrCode className="h-3.5 w-3.5 text-teal-500" />
-                    <span>QR Label</span>
-                  </button>
+                  {hasQrBarcode && (
+                    <button
+                      type="button"
+                      onClick={() => setLabelAsset(detailAsset)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-2 text-xs font-semibold text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                    >
+                      <QrCode className="h-3.5 w-3.5 text-teal-500" />
+                      <span>QR Label</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     disabled={detailLoading}
@@ -1535,6 +1572,18 @@ export function AssetsView({
                         onViewAll={() => setDetailTab('timeline')}
                       />
                     </div>
+
+                    {hasCustomFields && (
+                      <CustomFieldValuesDisplay entityType="asset" entityId={detailAsset.id} />
+                    )}
+
+                    <AttachmentsPanel
+                      entityType="asset"
+                      entityId={detailAsset.id}
+                      orgId={detailAsset.org_id}
+                      canWrite={canUpdate}
+                      onToast={onToast}
+                    />
                   </div>
                 )}
 

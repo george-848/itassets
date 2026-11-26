@@ -12,11 +12,15 @@ let apiStartupError: unknown = null;
 let frontendStartupError: unknown = null;
 
 async function initApi(): Promise<express.Express> {
-  const [{ createApiApp, getSharedDatabase }, { getSharedSaasStore }] =
-    await Promise.all([
-      import('./server/app.ts'),
-      import('./server/saasStore.ts'),
-    ]);
+  const [
+    { createApiApp, getSharedDatabase },
+    { getSharedSaasStore },
+    { startBackgroundScheduler },
+  ] = await Promise.all([
+    import('./server/app.ts'),
+    import('./server/saasStore.ts'),
+    import('./server/scheduler.ts'),
+  ]);
 
   const [db, saasStore] = await Promise.all([
     getSharedDatabase(),
@@ -24,6 +28,7 @@ async function initApi(): Promise<express.Express> {
   ]);
 
   const app = createApiApp(db, saasStore);
+  startBackgroundScheduler(saasStore, db);
   apiApp = app;
   return app;
 }

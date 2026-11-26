@@ -4,6 +4,7 @@ import {
   Building2,
   ClipboardCheck,
   PackageCheck,
+  Paperclip,
   Plus,
   ShoppingCart,
   X,
@@ -11,6 +12,7 @@ import {
 import { api, ApiError, type ExtendedTenantContext } from '../lib/api.ts';
 import { ASSET_CATEGORIES } from '../types/itams.ts';
 import type { PurchaseOrder, PurchaseRequest, Vendor } from '../types/saas.ts';
+import { AttachmentsPanel } from './AttachmentsPanel.tsx';
 import { formatGhsExact } from './StatusText.tsx';
 import { EmptyState } from './ui/EmptyState.tsx';
 
@@ -70,11 +72,14 @@ export function ProcurementView({
   const [poQty, setPoQty] = useState('2');
   const [poUnitCost, setPoUnitCost] = useState('9500');
   const [receivingId, setReceivingId] = useState<string | null>(null);
+  const [poAttachmentsTarget, setPoAttachmentsTarget] =
+    useState<PurchaseOrder | null>(null);
 
+  const isReadOnly = Boolean(tenantCtx?.isReadOnlyGraceOrExpired);
   const perms = tenantCtx?.permissions ?? [];
-  const canCreate = perms.includes('procurement.create');
-  const canApprove = perms.includes('procurement.approve');
-  const canCreateAssets = perms.includes('assets.create');
+  const canCreate = !isReadOnly && perms.includes('procurement.create');
+  const canApprove = !isReadOnly && perms.includes('procurement.approve');
+  const canCreateAssets = !isReadOnly && perms.includes('assets.create');
 
   const loadProcurement = async () => {
     setLoading(true);
@@ -306,23 +311,34 @@ export function ProcurementView({
                         {po.status}
                       </td>
                       <td className="py-3 px-4 text-right">
-                        {po.status !== 'Received' && canCreateAssets ? (
+                        <div className="inline-flex items-center justify-end gap-2">
                           <button
                             type="button"
-                            disabled={receivingId === po.id}
-                            onClick={() => handleReceivePo(po)}
-                            className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                            onClick={() => setPoAttachmentsTarget(po)}
+                            title="Attach vendor quote, invoice, or delivery receipt"
+                            className="inline-flex items-center gap-1 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-2.5 py-1.5 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)]"
                           >
-                            <PackageCheck className="h-3.5 w-3.5" />
-                            <span>
-                              {receivingId === po.id ? 'Receiving...' : 'Receive into Inventory'}
-                            </span>
+                            <Paperclip className="h-3.5 w-3.5" />
+                            <span>Docs</span>
                           </button>
-                        ) : (
-                          <span className="text-[var(--av-text-subtle)]">
-                            {po.receivedAssetIds.length} assets logged
-                          </span>
-                        )}
+                          {po.status !== 'Received' && canCreateAssets ? (
+                            <button
+                              type="button"
+                              disabled={receivingId === po.id}
+                              onClick={() => handleReceivePo(po)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                            >
+                              <PackageCheck className="h-3.5 w-3.5" />
+                              <span>
+                                {receivingId === po.id ? 'Receiving...' : 'Receive into Inventory'}
+                              </span>
+                            </button>
+                          ) : po.receivedAssetIds.length > 0 ? (
+                            <span className="text-[var(--av-text-subtle)]">
+                              {po.receivedAssetIds.length} assets logged
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -678,6 +694,47 @@ export function ProcurementView({
                   </button>
                 </div>
               </form>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* PO Attachments Modal */}
+      <AnimatePresence>
+        {poAttachmentsTarget && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setPoAttachmentsTarget(null)}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-lg rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-2xl overflow-hidden"
+            >
+              <div className="flex items-center justify-between border-b border-[var(--av-border-subtle)] px-6 py-4">
+                <div>
+                  <h3 className="font-display text-base font-semibold text-[var(--av-text)]">
+                    PO Documents · {poAttachmentsTarget.poNumber}
+                  </h3>
+                  <p className="text-xs text-[var(--av-text-subtle)]">
+                    {poAttachmentsTarget.itemName} · {poAttachmentsTarget.vendorName}
+                  </p>
+                </div>
+                <button type="button" onClick={() => setPoAttachmentsTarget(null)}>
+                  <X className="h-4 w-4 text-[var(--av-text-subtle)]" />
+                </button>
+              </div>
+              <div className="p-6">
+                <AttachmentsPanel
+                  entityType="po"
+                  entityId={poAttachmentsTarget.id}
+                  orgId={poAttachmentsTarget.orgId}
+                  canWrite={canCreate || canApprove}
+                  onToast={onToast}
+                />
+              </div>
             </div>
           </motion.div>
         )}

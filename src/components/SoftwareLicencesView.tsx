@@ -44,7 +44,9 @@ export function SoftwareLicencesView({
   );
   const [submitting, setSubmitting] = useState(false);
 
-  const canManage = tenantCtx?.permissions.includes('licences.manage') ?? false;
+  const canManage =
+    !tenantCtx?.isReadOnlyGraceOrExpired &&
+    (tenantCtx?.permissions.includes('licences.manage') ?? false);
 
   const loadLicences = async () => {
     setLoading(true);

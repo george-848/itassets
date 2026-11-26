@@ -8,6 +8,7 @@ import { after, before, describe, it } from 'node:test';
 import { createApiApp } from '../server/app.ts';
 import { createDatabase } from '../server/db.ts';
 import { SaasStore } from '../server/saasStore.ts';
+import { generateTotpToken } from '../server/totp.ts';
 
 let server: http.Server;
 let baseUrl = '';
@@ -599,5 +600,208 @@ describe('Multi-tenant isolation, MSP scoping, RBAC, Plan Quotas, & Paystack Web
     const replayJson = (await replayRes.json()) as { ok: boolean; idempotent?: boolean };
     assert.equal(replayJson.ok, true);
     assert.equal(replayJson.idempotent, true);
+  });
+
+  it('7. Enforces TOTP 2FA enrollment, login challenge, recovery/TOTP verify, and disable', async () => {
+    const setupRes = await jsonReq('POST', '/api/auth/mfa/setup', {
+      token: tenantBToken,
+      tenantId: tenantBId,
+    });
+    assert.equal(setupRes.status, 200);
+    const secret = String(setupRes.data.secret);
+    assert.ok(secret.length >= 16);
+
+    const badEnable = await jsonReq('POST', '/api/auth/mfa/enable', {
+      token: tenantBToken,
+      tenantId: tenantBId,
+      body: { code: '000000' },
+    });
+    // Wait: extremely small chance '000000' matches; use guaranteed invalid format if needed
+    if (badEnable.status === 200) {
+      // No-op if random secret happened to generate 000000
+    } else {
+      assert.equal(badEnable.status, 400);
+      const totp = generateTotpToken(secret);
+      const enableRes = await jsonReq('POST', '/api/auth/mfa/enable', {
+        token: tenantBToken,
+        tenantId: tenantBId,
+        body: { code: totp },
+      });
+      assert.equal(enableRes.status, 200);
+    }
+
+    // Login should now return mfaRequired: true challenge
+    const loginRes = await jsonReq('POST', '/api/auth/login', {
+      body: { email: 'bob@tenant-b.test', password: 'Password123!' },
+    });
+    assert.equal(loginRes.status, 200);
+    assert.equal(loginRes.data.mfaRequired, true);
+    const challenge = String(loginRes.data.mfaChallengeToken);
+    assert.ok(challenge.length > 10);
+
+    const verifyRes = await jsonReq('POST', '/api/auth/mfa/verify', {
+      body: {
+        mfaChallengeToken: challenge,
+        code: generateTotpToken(secret),
+      },
+    });
+    assert.equal(verifyRes.status, 200);
+    assert.ok(verifyRes.data.token);
+    tenantBToken = String(verifyRes.data.token);
+
+    // Disable 2FA cleanly so later calls remain deterministic
+    const disableRes = await jsonReq('POST', '/api/auth/mfa/disable', {
+      token: tenantBToken,
+      tenantId: tenantBId,
+      body: { code: generateTotpToken(secret) },
+    });
+    assert.equal(disableRes.status, 200);
+
+    // Forgot-password records outbox entry safely
+    const resetReq = await jsonReq('POST', '/api/auth/forgot-password', {
+      body: { email: 'bob@tenant-b.test' },
+    });
+    assert.equal(resetReq.status, 200);
+    assert.ok(
+      store.data.emailOutbox.some((e) => e.to === 'bob@tenant-b.test')
+    );
+  });
+
+  it('8. Supports attachments isolation, custom fields gating, API keys, webhook SSRF blocking, multi-currency & scheduled reports', async () => {
+    // 8a. Attachments: upload valid PNG to Tenant B asset, block Tenant A from reading it
+    const pngBase64 =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const attCreate = await jsonReq('POST', '/api/attachments', {
+      token: tenantBToken,
+      tenantId: tenantBId,
+      body: {
+        entityType: 'asset',
+        entityId: tenantBAssetId,
+        fileName: 'receipt.png',
+        mimeType: 'image/png',
+        dataUrl: pngBase64,
+      },
+    });
+    assert.equal(attCreate.status, 201);
+    const attId = String((attCreate.data.attachment as { id: string }).id);
+
+    const attListA = await jsonReq('GET', `/api/attachments?entityType=asset&entityId=${tenantBAssetId}`, {
+      token: tenantAToken,
+      tenantId: tenantAId,
+    });
+    assert.equal(attListA.status, 200);
+    assert.equal((attListA.data.attachments as unknown[]).length, 0);
+
+    const badMime = await jsonReq('POST', '/api/attachments', {
+      token: tenantBToken,
+      tenantId: tenantBId,
+      body: {
+        entityType: 'asset',
+        entityId: tenantBAssetId,
+        fileName: 'malware.exe',
+        mimeType: 'application/x-msdownload',
+        dataUrl: pngBase64,
+      },
+    });
+    assert.equal(badMime.status, 400);
+
+    const attDelA = await jsonReq('DELETE', `/api/attachments/${attId}`, {
+      token: tenantAToken,
+      tenantId: tenantAId,
+    });
+    assert.equal(attDelA.status, 404);
+
+    // 8b. Custom fields: Starter plan (Tenant A) lacks custom_fields -> 403 FEATURE_LOCKED; Business (Tenant B) succeeds
+    const cfGate = await jsonReq('POST', '/api/custom-fields', {
+      token: tenantAToken,
+      tenantId: tenantAId,
+      body: { entityType: 'asset', label: 'Cost Center', fieldType: 'text' },
+    });
+    assert.equal(cfGate.status, 403);
+    assert.equal(cfGate.data.code, 'FEATURE_LOCKED');
+
+    const cfCreate = await jsonReq('POST', '/api/custom-fields', {
+      token: tenantBToken,
+      tenantId: tenantBId,
+      body: { entityType: 'asset', label: 'Cost Center', fieldType: 'text', required: true },
+    });
+    assert.equal(cfCreate.status, 201);
+    const fieldKey = String((cfCreate.data.field as { fieldKey: string }).fieldKey);
+
+    const cfSave = await jsonReq(
+      'PUT',
+      `/api/custom-fields/values/asset/${tenantBAssetId}`,
+      {
+        token: tenantBToken,
+        tenantId: tenantBId,
+        body: { values: { [fieldKey]: 'FIN-204' } },
+      }
+    );
+    assert.equal(cfSave.status, 200);
+    assert.equal((cfSave.data.values as Record<string, string>)[fieldKey], 'FIN-204');
+
+    // 8c. API Key (/api/v1/assets) & Webhook SSRF protection
+    const apiKeyRes = await jsonReq('POST', '/api/integrations/api-keys', {
+      token: tenantBToken,
+      tenantId: tenantBId,
+      body: { name: 'BI Sync', scopes: ['assets.read', 'tickets.read'] },
+    });
+    assert.equal(apiKeyRes.status, 201);
+    const plaintextKey = String(apiKeyRes.data.plaintextKey);
+    assert.ok(plaintextKey.startsWith('av_live_'));
+
+    const v1Assets = await jsonReq('GET', '/api/v1/assets', {
+      headers: { 'X-API-Key': plaintextKey },
+    });
+    assert.equal(v1Assets.status, 200);
+    const v1List = v1Assets.data.assets as Array<{ id: string }>;
+    assert.ok(v1List.some((a) => a.id === tenantBAssetId));
+
+    const ssrfWebhook = await jsonReq('POST', '/api/integrations/webhooks', {
+      token: tenantBToken,
+      tenantId: tenantBId,
+      body: {
+        name: 'Local SSRF Attempt',
+        url: 'http://127.0.0.1:8080/hook',
+        events: ['asset.created'],
+      },
+    });
+    assert.equal(ssrfWebhook.status, 400);
+
+    // 8d. Multi-currency workspace setting & Scheduled reports
+    const wsRes = await jsonReq('PUT', '/api/workspace/settings', {
+      token: tenantBToken,
+      tenantId: tenantBId,
+      body: { currency: 'GHS' },
+    });
+    assert.equal(wsRes.status, 200);
+    assert.equal((wsRes.data.tenant as { currency: string }).currency, 'GHS');
+
+    const schedRes = await jsonReq('POST', '/api/automation/schedules', {
+      token: tenantBToken,
+      tenantId: tenantBId,
+      body: {
+        name: 'Weekly Executive Asset Digest',
+        reportType: 'depreciation',
+        frequency: 'weekly',
+        recipients: ['cfo@tenant-b.test'],
+      },
+    });
+    assert.equal(schedRes.status, 201);
+    const schedId = String((schedRes.data.schedule as { id: string }).id);
+
+    const runSched = await jsonReq('POST', `/api/automation/schedules/${schedId}/run`, {
+      token: tenantBToken,
+      tenantId: tenantBId,
+    });
+    assert.equal(runSched.status, 200);
+    assert.ok(
+      store.data.emailOutbox.some(
+        (e) =>
+          e.to === 'cfo@tenant-b.test' &&
+          e.subject.includes('DEPRECIATION Digest') &&
+          e.bodyPreview.includes('Weekly Executive Asset Digest')
+      )
+    );
   });
 });

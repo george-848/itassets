@@ -23,6 +23,7 @@ export function createDefaultPlans(): SubscriptionPlan[] {
         maxLocations: 2,
         maxClientOrgs: 1,
         maxTicketsPerMonth: 250,
+        maxStorageMb: 512,
       },
       features: ['helpdesk', 'qr_barcode', 'audit_logs'],
       updatedAt: now,
@@ -41,6 +42,7 @@ export function createDefaultPlans(): SubscriptionPlan[] {
         maxLocations: 10,
         maxClientOrgs: 10,
         maxTicketsPerMonth: 2000,
+        maxStorageMb: 2048,
       },
       features: [
         'msp_mode',
@@ -68,6 +70,7 @@ export function createDefaultPlans(): SubscriptionPlan[] {
         maxLocations: 50,
         maxClientOrgs: 50,
         maxTicketsPerMonth: 10000,
+        maxStorageMb: 10240,
       },
       features: [
         'msp_mode',
@@ -100,6 +103,7 @@ export function createDefaultPlans(): SubscriptionPlan[] {
         maxLocations: null,
         maxClientOrgs: null,
         maxTicketsPerMonth: null,
+        maxStorageMb: null,
       },
       features: [
         'msp_mode',
@@ -120,6 +124,21 @@ export function createDefaultPlans(): SubscriptionPlan[] {
       updatedAt: now,
     },
   ];
+}
+
+function getDefaultStorageLimitMb(planCode: SubscriptionPlan['code']): number | null {
+  switch (planCode) {
+    case 'starter':
+      return 512;
+    case 'professional':
+      return 2048;
+    case 'business':
+      return 10240;
+    case 'enterprise':
+      return null;
+    default:
+      return 512;
+  }
 }
 
 export function computeEffectiveEntitlements(
@@ -144,6 +163,12 @@ export function computeEffectiveEntitlements(
       overrides?.maxTicketsPerMonth !== undefined
         ? overrides.maxTicketsPerMonth
         : plan.limits.maxTicketsPerMonth,
+    maxStorageMb:
+      overrides?.maxStorageMb !== undefined
+        ? overrides.maxStorageMb
+        : plan.limits.maxStorageMb !== undefined
+          ? plan.limits.maxStorageMb
+          : getDefaultStorageLimitMb(plan.code),
   };
 
   const featureSet = new Set<FeatureKey>(plan.features);
@@ -226,6 +251,10 @@ export function buildUsageSnapshot(params: {
   locationsCount: number;
   clientOrgsCount: number;
   ticketsThisMonth: number;
+  storageUsedBytes?: number;
 }): WorkspaceUsage {
-  return params;
+  return {
+    ...params,
+    storageUsedBytes: params.storageUsedBytes ?? 0,
+  };
 }

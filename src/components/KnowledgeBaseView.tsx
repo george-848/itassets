@@ -39,7 +39,7 @@ export function KnowledgeBaseView({
   const [submitting, setSubmitting] = useState(false);
 
   const perms = tenantCtx?.permissions ?? [];
-  const canManage = perms.includes('kb.manage');
+  const canManage = !tenantCtx?.isReadOnlyGraceOrExpired && perms.includes('kb.manage');
 
   const loadKb = async () => {
     setLoading(true);

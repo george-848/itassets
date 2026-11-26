@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
   CheckCircle2,
   CreditCard,
@@ -29,10 +30,14 @@ function UsageBar({
   label,
   used,
   max,
+  usedText,
+  maxText,
 }: {
   label: string;
   used: number;
   max: number | null;
+  usedText?: string;
+  maxText?: string;
 }) {
   const pct = max === null ? 15 : Math.min(100, Math.round((used / Math.max(1, max)) * 100));
   const nearLimit = max !== null && used >= max;
@@ -41,7 +46,7 @@ function UsageBar({
       <div className="flex items-center justify-between text-xs">
         <span className="font-medium text-[var(--av-text-muted)]">{label}</span>
         <span className="font-mono font-semibold text-[var(--av-text)] tabular-nums">
-          {used} / {max === null ? 'Unlimited' : max}
+          {usedText ?? used} / {max === null ? 'Unlimited' : (maxText ?? max)}
         </span>
       </div>
       <div className="h-2 w-full rounded-full bg-[var(--av-surface-muted)] overflow-hidden">
@@ -54,6 +59,23 @@ function UsageBar({
       </div>
     </div>
   );
+}
+
+function formatStorageBytesLabel(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  const mb = bytes / (1024 * 1024);
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
+}
+
+function formatStorageMaxMbLabel(maxMb: number | null | undefined): string {
+  if (maxMb === null || maxMb === undefined) return 'Unlimited';
+  if (maxMb >= 1024) {
+    const gb = maxMb / 1024;
+    return Number.isInteger(gb) ? `${gb} GB` : `${gb.toFixed(1)} GB`;
+  }
+  return `${maxMb} MB`;
 }
 
 export function SubscriptionBillingView({
@@ -155,19 +177,84 @@ export function SubscriptionBillingView({
 
   const handleDownloadReceiptPdf = (inv: InvoiceRecord) => {
     const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageW = doc.internal.pageSize.getWidth();
+
+    // Brand Header
+    doc.setFillColor(15, 23, 42);
+    doc.rect(0, 0, pageW, 92, 'F');
+    doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(18);
-    doc.text('AssetVault IT — Tax & Subscription Receipt', 48, 64);
+    doc.text('AssetVault IT', 44, 42);
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(11);
-    doc.text(`Invoice Number: ${inv.invoiceNumber}`, 48, 100);
-    doc.text(`Workspace: ${tenantCtx?.tenant.name || 'AssetVault Tenant'}`, 48, 120);
-    doc.text(`Plan: ${inv.planName} (${inv.billingCycle})`, 48, 140);
-    doc.text(`Amount Paid: GHS ${inv.amountGhs.toFixed(2)}`, 48, 160);
-    doc.text(`Status: ${inv.status.toUpperCase()}`, 48, 180);
-    doc.text(`Issued Date: ${inv.issuedAt.slice(0, 10)}`, 48, 200);
-    doc.save(`${inv.invoiceNumber}_Receipt.pdf`);
-    onToast('success', `Downloaded ${inv.invoiceNumber} PDF receipt.`);
+    doc.setFontSize(10);
+    doc.text('SaaS Subscription Tax Invoice & Receipt', 44, 62);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.text(inv.invoiceNumber, pageW - 44, 42, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.text(`STATUS: ${inv.status.toUpperCase()}`, pageW - 44, 62, {
+      align: 'right',
+    });
+
+    // Billed To / Metadata
+    doc.setTextColor(15, 23, 42);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('BILLED TO', 44, 126);
+    doc.setFont('helvetica', 'normal');
+    doc.text(tenantCtx?.tenant.name || 'AssetVault Tenant', 44, 144);
+    doc.text(
+      `${tenantCtx?.tenant.country || 'Ghana'} · ${tenantCtx?.tenant.supportEmail || ''}`,
+      44,
+      160
+    );
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('INVOICE DETAILS', pageW - 220, 126);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Issued Date: ${inv.issuedAt.slice(0, 10)}`, pageW - 220, 144);
+    doc.text(`Due Date: ${inv.dueAt.slice(0, 10)}`, pageW - 220, 160);
+    doc.text(`Payment Ref: ${inv.paymentId}`, pageW - 220, 176);
+
+    autoTable(doc, {
+      startY: 204,
+      head: [['Description', 'Billing Cycle', 'Qty', 'Amount (GHS)']],
+      body: [
+        [
+          `AssetVault IT — ${inv.planName} Workspace Subscription`,
+          inv.billingCycle.charAt(0).toUpperCase() + inv.billingCycle.slice(1),
+          '1',
+          `GHS ${inv.amountGhs.toFixed(2)}`,
+        ],
+      ],
+      theme: 'grid',
+      headStyles: { fillColor: [37, 99, 235], textColor: 255, fontSize: 10 },
+      styles: { fontSize: 10, cellPadding: 8 },
+    });
+
+    const finalY =
+      ((doc as unknown as { lastAutoTable?: { finalY?: number } }).lastAutoTable
+        ?.finalY ?? 280) + 28;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text(`Total Paid: GHS ${inv.amountGhs.toFixed(2)}`, pageW - 44, finalY, {
+      align: 'right',
+    });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139);
+    doc.text(
+      'Generated electronically by AssetVault IT Billing Ledger. Retain for accounting and tax compliance.',
+      44,
+      finalY + 34
+    );
+
+    doc.save(`${inv.invoiceNumber}_Invoice.pdf`);
+    onToast('success', `Downloaded ${inv.invoiceNumber} PDF invoice.`);
   };
 
   const usage = tenantCtx?.usage;
@@ -239,6 +326,17 @@ export function SubscriptionBillingView({
                 label="Tickets This Month"
                 used={usage.ticketsThisMonth}
                 max={limits.maxTicketsPerMonth}
+              />
+              <UsageBar
+                label="Attachment Storage"
+                used={usage.storageUsedBytes ?? 0}
+                max={
+                  limits.maxStorageMb === null || limits.maxStorageMb === undefined
+                    ? null
+                    : limits.maxStorageMb * 1024 * 1024
+                }
+                usedText={formatStorageBytesLabel(usage.storageUsedBytes ?? 0)}
+                maxText={formatStorageMaxMbLabel(limits.maxStorageMb)}
               />
             </div>
           )}

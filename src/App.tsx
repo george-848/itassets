@@ -28,18 +28,24 @@ import {
   Search,
   Server,
   Shield,
+  ShieldCheck,
   ShoppingCart,
+  SlidersHorizontal,
   Sun,
+  UserCheck,
   Users,
   Wrench,
   X,
 } from 'lucide-react';
+import { AccountSecurityModal } from './components/AccountSecurityModal.tsx';
 import { AssetsView } from './components/AssetsView.tsx';
 import { AssignmentsView } from './components/AssignmentsView.tsx';
 import { AuditLogsView } from './components/AuditLogsView.tsx';
 import { DashboardView, type NavSection } from './components/DashboardView.tsx';
+import { EmployeePortalView } from './components/EmployeePortalView.tsx';
 import { EmployeesView } from './components/EmployeesView.tsx';
 import { HelpdeskView } from './components/HelpdeskView.tsx';
+import { IntegrationsAndAutomationView } from './components/IntegrationsAndAutomationView.tsx';
 import { ItsmView } from './components/ItsmView.tsx';
 import { KnowledgeBaseView } from './components/KnowledgeBaseView.tsx';
 import { LoginView } from './components/LoginView.tsx';
@@ -68,6 +74,7 @@ import {
   type ExtendedTenantContext,
   type ExtendedUser,
 } from './lib/api.ts';
+import { setWorkspaceCurrency } from './lib/currency.ts';
 import { googleSignOut, initGoogleAuthListener } from './lib/googleAuth.ts';
 import { useTheme } from './lib/theme.tsx';
 import type {
@@ -80,6 +87,7 @@ import type {
   User,
 } from './types/itams.ts';
 import type {
+  FeatureKey,
   PermissionCode,
   PurchaseOrder,
   SoftwareLicence,
@@ -125,6 +133,11 @@ const SECTION_META: Record<
     label: 'IT Helpdesk',
     subtitle: 'Multi-tenant ticketing queue, SLA timers, internal notes, and CSAT',
   },
+  employee_portal: {
+    group: 'Helpdesk & ITSM',
+    label: 'Self-Service Portal',
+    subtitle: 'Assigned IT equipment, direct ticket intake, service catalogue, and help guides',
+  },
   itsm: {
     group: 'Helpdesk & ITSM',
     label: 'ITSM Suite',
@@ -148,7 +161,7 @@ const SECTION_META: Record<
   reports: {
     group: 'Governance & Spend',
     label: 'Reports & Exports',
-    subtitle: 'Generate filterable inventory, helpdesk, licence, and procurement exports',
+    subtitle: 'Generate filterable inventory, depreciation, helpdesk, licence, and procurement exports',
   },
   notifications: {
     group: 'Governance & Spend',
@@ -174,6 +187,11 @@ const SECTION_META: Record<
     group: 'Workspace & Billing',
     label: 'Billing & Plans',
     subtitle: 'GH₵ subscription tiers, usage quotas, Paystack checkout, and invoices',
+  },
+  integrations: {
+    group: 'Workspace & Billing',
+    label: 'Settings, API & Automation',
+    subtitle: 'Multi-currency, custom fields, API keys, outbound webhooks, and scheduled reports',
   },
   super_admin: {
     group: 'Platform Admin',
@@ -209,6 +227,7 @@ export default function App() {
   const [supportOpen, setSupportOpen] = useState(false);
   const [notifPopoverOpen, setNotifPopoverOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [securityModalOpen, setSecurityModalOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
 
@@ -302,8 +321,12 @@ export default function App() {
       try {
         const ctx = await api.getContext();
         setTenantCtx(ctx);
+        setWorkspaceCurrency(ctx.tenant.currency);
         setActiveTenantId(ctx.tenant.id);
         setActiveOrgId(ctx.isAllOrgsView ? 'all' : ctx.activeOrg.id);
+        if (ctx.membership.role === 'employee') {
+          setActiveSection((prev) => (prev === 'dashboard' ? 'employee_portal' : prev));
+        }
 
         const perms = new Set<PermissionCode>(ctx.permissions);
         const features = new Set(ctx.effectiveFeatures);
@@ -508,8 +531,10 @@ export default function App() {
   };
 
   const permsSet = new Set<PermissionCode>(tenantCtx?.permissions ?? []);
+  const featuresSet = new Set<FeatureKey>(tenantCtx?.effectiveFeatures ?? []);
   const hasPerm = (p: PermissionCode) =>
     permsSet.has(p) || Boolean(tenantCtx?.isSuperAdmin);
+  const hasFeature = (f: FeatureKey) => !tenantCtx || featuresSet.has(f);
 
   const canAccessSection = (section: NavSection): boolean => {
     if (section === 'super_admin') return Boolean(tenantCtx?.isSuperAdmin);
@@ -528,33 +553,52 @@ export default function App() {
       case 'maintenance':
         return hasPerm('maintenance.read');
       case 'licences':
-        return hasPerm('licences.read');
+        return hasPerm('licences.read') && hasFeature('software_licences');
       case 'tickets':
-        return hasPerm('tickets.read');
+        return hasPerm('tickets.read') && hasFeature('helpdesk');
+      case 'employee_portal':
+        return hasPerm('tickets.create') || hasPerm('assets.read');
       case 'itsm':
-        return hasPerm('itsm.read');
+        return hasPerm('itsm.read') && hasFeature('itsm_suite');
       case 'sla_contracts':
-        return hasPerm('sla.read') || hasPerm('contracts.read');
+        return (hasPerm('sla.read') || hasPerm('contracts.read')) && hasFeature('sla_automation');
       case 'kb':
-        return hasPerm('kb.read');
+        return hasPerm('kb.read') && hasFeature('knowledge_base');
       case 'procurement':
-        return hasPerm('procurement.read');
+        return hasPerm('procurement.read') && hasFeature('procurement');
       case 'reports':
         return hasPerm('reports.read');
       case 'notifications':
         return true;
       case 'audit_logs':
-        return hasPerm('audit.read');
+        return hasPerm('audit.read') && hasFeature('audit_logs');
       case 'org_structure':
         return hasPerm('org.read');
       case 'users':
         return hasPerm('users.read');
       case 'billing':
         return hasPerm('billing.read');
+      case 'integrations':
+        return hasPerm('org.manage') || hasPerm('billing.read');
       default:
         return true;
     }
   };
+
+  useEffect(() => {
+    if (!tenantCtx) return;
+    if (!canAccessSection(activeSection)) {
+      if (tenantCtx.membership.role === 'employee') {
+        setActiveSection('employee_portal');
+      } else if (canAccessSection('dashboard')) {
+        setActiveSection('dashboard');
+      } else if (canAccessSection('billing')) {
+        setActiveSection('billing');
+      } else {
+        setActiveSection('notifications');
+      }
+    }
+  }, [tenantCtx, activeSection]);
 
   const navigateTo = (section: NavSection) => {
     if (!canAccessSection(section)) {
@@ -623,6 +667,13 @@ export default function App() {
     { id: 'licences', label: 'Software Licences', icon: KeyRound, iconColor: 'text-emerald-400', group: 'core' },
 
     {
+      id: 'employee_portal',
+      label: 'Self-Service Portal',
+      icon: UserCheck,
+      iconColor: 'text-emerald-400',
+      group: 'helpdesk_itsm',
+    },
+    {
       id: 'tickets',
       label: 'IT Helpdesk',
       icon: LifeBuoy,
@@ -649,6 +700,7 @@ export default function App() {
     { id: 'org_structure', label: 'Organisations & Sites', icon: Building2, iconColor: 'text-indigo-400', group: 'workspace_billing' },
     { id: 'users', label: 'Users & Access', icon: Shield, iconColor: 'text-cyan-400', group: 'workspace_billing' },
     { id: 'billing', label: 'Billing & Plans', icon: CreditCard, iconColor: 'text-emerald-400', group: 'workspace_billing' },
+    { id: 'integrations', label: 'API & Automation', icon: SlidersHorizontal, iconColor: 'text-sky-400', group: 'workspace_billing' },
 
     { id: 'super_admin', label: 'Platform Admin', icon: Crown, iconColor: 'text-amber-400', group: 'platform_admin' },
   ];
@@ -1084,16 +1136,18 @@ export default function App() {
                               key={n.id}
                               type="button"
                               onClick={() => {
-                                if (n.entity_type === 'maintenance') {
+                                if (n.entity_type === 'maintenance' && canAccessSection('maintenance')) {
                                   navigateTo('maintenance');
-                                } else if (n.entity_type === 'ticket') {
+                                } else if (n.entity_type === 'ticket' && canAccessSection('tickets')) {
                                   navigateTo('tickets');
-                                } else if (n.entity_type === 'licence') {
+                                } else if (n.entity_type === 'licence' && canAccessSection('licences')) {
                                   navigateTo('licences');
-                                } else if (n.entity_type === 'subscription') {
+                                } else if (n.entity_type === 'subscription' && canAccessSection('billing')) {
                                   navigateTo('billing');
-                                } else {
+                                } else if (n.asset_id && canAccessSection('assets')) {
                                   handleOpenAsset(n.asset_id);
+                                } else {
+                                  navigateTo('notifications');
                                 }
                               }}
                               className="w-full px-4 py-3 text-left hover:bg-[var(--av-surface-hover)] transition-colors"
@@ -1229,6 +1283,18 @@ export default function App() {
                           type="button"
                           onClick={() => {
                             setProfileMenuOpen(false);
+                            setSecurityModalOpen(true);
+                          }}
+                          className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
+                        >
+                          <ShieldCheck className="h-3.5 w-3.5 text-indigo-500" />
+                          <span>Security &amp; 2FA</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProfileMenuOpen(false);
                             setSupportOpen(true);
                           }}
                           className="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors"
@@ -1270,9 +1336,11 @@ export default function App() {
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                 <span className="font-medium">
                   {tenantCtx.isReadOnlyGraceOrExpired
-                    ? `Subscription ${sub?.status}. Workspace is in read-only mode until payment is renewed.`
+                    ? sub?.status === 'trialing'
+                      ? 'Your 14-day free trial has ended. Workspace is in view & export mode until a plan is activated.'
+                      : `Subscription ${sub?.status}. Workspace is in view & export mode until payment is renewed.`
                     : sub?.status === 'grace_period'
-                      ? `Subscription is in grace period. Renew in Paystack GH₵ billing to prevent read-only lock.`
+                      ? `Subscription is in grace period. Renew in billing to prevent view-only lock.`
                       : `${tenantCtx.plan.name} free trial active (${trialDaysLeft} day${trialDaysLeft === 1 ? '' : 's'} remaining).`}
                 </span>
               </div>
@@ -1334,6 +1402,7 @@ export default function App() {
                   <EmployeesView
                     employees={employees}
                     userRole={currentUser.role}
+                    tenantCtx={tenantCtx}
                     onRefresh={handleRefresh}
                     onToast={pushToast}
                     onRequestAssignToEmployee={(employee) => {
@@ -1348,6 +1417,7 @@ export default function App() {
                     assignments={assignments}
                     assets={assets}
                     employees={employees}
+                    tenantCtx={tenantCtx}
                     preselectedAsset={assignPreselectAsset}
                     preselectedEmployee={assignPreselectEmployee}
                     onClearPreselections={() => {
@@ -1365,6 +1435,7 @@ export default function App() {
                     assets={assets}
                     tickets={tickets}
                     userRole={currentUser.role}
+                    tenantCtx={tenantCtx}
                     preselectedAsset={maintPreselectAsset}
                     onClearPreselectedAsset={() => setMaintPreselectAsset(null)}
                     onRefresh={handleRefresh}
@@ -1390,6 +1461,17 @@ export default function App() {
                     onRefresh={handleRefresh}
                     onToast={pushToast}
                     onPlanBlocked={handlePlanBlocked}
+                  />
+                )}
+
+                {activeSection === 'employee_portal' && (
+                  <EmployeePortalView
+                    currentUser={currentUser}
+                    tenantCtx={tenantCtx}
+                    assets={assets}
+                    tickets={tickets}
+                    onRefresh={handleRefresh}
+                    onToast={pushToast}
                   />
                 )}
 
@@ -1446,6 +1528,7 @@ export default function App() {
                     onOpenAsset={handleOpenAsset}
                     onOpenMaintenance={() => navigateTo('maintenance')}
                     onNavigate={navigateTo}
+                    canNavigate={canAccessSection}
                     onToast={pushToast}
                   />
                 )}
@@ -1479,6 +1562,15 @@ export default function App() {
                     tenantCtx={tenantCtx}
                     onRefreshContext={handleRefresh}
                     onToast={pushToast}
+                  />
+                )}
+
+                {activeSection === 'integrations' && (
+                  <IntegrationsAndAutomationView
+                    tenantCtx={tenantCtx}
+                    onRefreshContext={handleRefresh}
+                    onToast={pushToast}
+                    onPlanBlocked={handlePlanBlocked}
                   />
                 )}
 
@@ -1578,6 +1670,7 @@ export default function App() {
           maintenanceLogs={maintenanceLogs}
           userRole={currentUser.role}
           permissions={tenantCtx?.permissions ?? []}
+          effectiveFeatures={tenantCtx?.effectiveFeatures ?? []}
           isSuperAdmin={Boolean(tenantCtx?.isSuperAdmin)}
           onOpenAsset={handleOpenAsset}
           onNavigate={navigateTo}
@@ -1586,6 +1679,13 @@ export default function App() {
         <SupportModal
           open={supportOpen}
           onClose={() => setSupportOpen(false)}
+        />
+
+        <AccountSecurityModal
+          open={securityModalOpen}
+          userEmail={currentUser.email}
+          onClose={() => setSecurityModalOpen(false)}
+          onToast={pushToast}
         />
 
         <ToastContainer toasts={toasts} onDismiss={dismissToast} />

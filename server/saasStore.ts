@@ -8,12 +8,14 @@ import { getPaystackPublicKeyHint, isPaystackLiveConfigured } from './paystack.t
 import { BOOTSTRAP_SUPER_ADMIN_EMAIL } from './rbac.ts';
 import type { AssetSpecs } from '../src/types/itams.ts';
 import type {
+  AttachmentItem,
   AuditLogEntry,
   AssetTransfer,
   ChangeRequest,
   ClientOrganisation,
   CustomFieldDef,
   DepartmentItem,
+  EmailOutboxEntry,
   Incident,
   InvoiceRecord,
   KnowledgeArticle,
@@ -23,6 +25,7 @@ import type {
   ProblemRecord,
   PurchaseOrder,
   PurchaseRequest,
+  ScheduledReportConfig,
   ServiceCatalogueItem,
   ServiceContract,
   ServiceRequest,
@@ -30,12 +33,15 @@ import type {
   SoftwareLicence,
   SubscriptionPlan,
   Tenant,
+  TenantApiKey,
   TenantInvitation,
   TenantSubscription,
   Ticket,
   TicketComment,
   UserMembership,
   Vendor,
+  WebhookDelivery,
+  WebhookEndpoint,
 } from '../src/types/saas.ts';
 
 export const DEFAULT_TENANT_ID = 'ten-default-01';
@@ -109,6 +115,14 @@ export interface SaasState {
   }>;
   processedWebhookRefs: string[];
   alertJobHistory: Array<{ key: string; triggeredAt: string }>;
+  attachments: AttachmentItem[];
+  customFieldValues: Record<string, Record<string, string>>;
+  apiKeys: Array<TenantApiKey & { keyHash: string }>;
+  webhooks: Array<WebhookEndpoint & { secret: string }>;
+  webhookDeliveries: WebhookDelivery[];
+  scheduledReports: ScheduledReportConfig[];
+  emailOutbox: EmailOutboxEntry[];
+  mfaSecrets: Record<string, { secret: string; recoveryCodes: string[] }>;
 }
 
 function createInitialSaasState(): SaasState {
@@ -129,6 +143,7 @@ function createInitialSaasState(): SaasState {
     deploymentMode: 'shared_cloud',
     supportEmail: 'support@assetvault.io',
     country: 'Ghana',
+    currency: 'USD',
     createdAt: now,
     updatedAt: now,
   };
@@ -371,6 +386,14 @@ function createInitialSaasState(): SaasState {
     passwordResetTokens: [],
     processedWebhookRefs: [],
     alertJobHistory: [],
+    attachments: [],
+    customFieldValues: {},
+    apiKeys: [],
+    webhooks: [],
+    webhookDeliveries: [],
+    scheduledReports: [],
+    emailOutbox: [],
+    mfaSecrets: {},
   };
 }
 
@@ -424,6 +447,11 @@ export class SaasStore {
               { upsert: true }
             );
         }
+        this.state.platformSettings.paystackConfigured = isPaystackLiveConfigured();
+        this.state.platformSettings.paystackPublicKeyHint = getPaystackPublicKeyHint();
+        this.state.platformSettings.smtpConfigured = Boolean(
+          process.env.SMTP_HOST && process.env.SMTP_USER
+        );
         this.initialized = true;
         return;
       } catch {
@@ -652,6 +680,245 @@ export class SaasStore {
       id: `cat-${crypto.randomUUID().slice(0, 8)}`,
       tenantId: params.tenant.id,
       orgId: params.defaultOrg.id,
+      name: 'New Laptop & Onboarding Bundle',
+      category: 'Hardware',
+      description: 'Provision standard workstation laptop and access credentials.',
+      estimatedFulfilmentHours: 24,
+      requiresApproval: true,
+      defaultCostGhs: 14500,
+      status: 'active',
+    });
+  }
+
+  purgeTenantStoreData(
+    tenantId: string,
+    modules: {
+      tickets?: boolean;
+      itsm?: boolean;
+      licences?: boolean;
+      procurement?: boolean;
+      slaContracts?: boolean;
+      knowledge?: boolean;
+      orgSites?: boolean;
+      billing?: boolean;
+      integrations?: boolean;
+      attachments?: boolean;
+      auditLogs?: boolean;
+      transfers?: boolean;
+      preserveDefaultOrg?: boolean;
+    },
+    removedAssetIds?: Set<string>
+  ): Record<string, number> {
+    const counts: Record<string, number> = {};
+    const s = this.state;
+
+    if (modules.transfers) {
+      const before = s.assetTransfers.length;
+      s.assetTransfers = s.assetTransfers.filter((x) => x.tenantId !== tenantId);
+      counts.assetTransfers = before - s.assetTransfers.length;
+    }
+    if (removedAssetIds && removedAssetIds.size > 0) {
+      for (const aid of removedAssetIds) {
+        delete s.assetMeta[aid];
+      }
+    }
+    if (modules.tickets) {
+      const removedTicketIds = new Set(
+        s.tickets.filter((t) => t.tenantId === tenantId).map((t) => t.id)
+      );
+      const before = s.tickets.length;
+      s.tickets = s.tickets.filter((t) => t.tenantId !== tenantId);
+      s.ticketComments = s.ticketComments.filter((c) => !removedTicketIds.has(c.ticketId));
+      counts.tickets = before - s.tickets.length;
+    }
+    if (modules.itsm) {
+      const before =
+        s.incidents.length +
+        s.problems.length +
+        s.changes.length +
+        s.serviceRequests.length +
+        s.serviceCatalogue.length;
+      s.incidents = s.incidents.filter((x) => x.tenantId !== tenantId);
+      s.problems = s.problems.filter((x) => x.tenantId !== tenantId);
+      s.changes = s.changes.filter((x) => x.tenantId !== tenantId);
+      s.serviceRequests = s.serviceRequests.filter((x) => x.tenantId !== tenantId);
+      s.serviceCatalogue = s.serviceCatalogue.filter((x) => x.tenantId !== tenantId);
+      counts.itsm =
+        before -
+        (s.incidents.length +
+          s.problems.length +
+          s.changes.length +
+          s.serviceRequests.length +
+          s.serviceCatalogue.length);
+    }
+    if (modules.licences) {
+      const before = s.softwareLicences.length;
+      s.softwareLicences = s.softwareLicences.filter((x) => x.tenantId !== tenantId);
+      counts.softwareLicences = before - s.softwareLicences.length;
+    }
+    if (modules.procurement) {
+      const before = s.vendors.length + s.purchaseRequests.length + s.purchaseOrders.length;
+      s.vendors = s.vendors.filter((x) => x.tenantId !== tenantId);
+      s.purchaseRequests = s.purchaseRequests.filter((x) => x.tenantId !== tenantId);
+      s.purchaseOrders = s.purchaseOrders.filter((x) => x.tenantId !== tenantId);
+      counts.procurement =
+        before - (s.vendors.length + s.purchaseRequests.length + s.purchaseOrders.length);
+    }
+    if (modules.slaContracts) {
+      const before = s.slaPolicies.length + s.contracts.length;
+      s.slaPolicies = s.slaPolicies.filter((x) => x.tenantId !== tenantId);
+      s.contracts = s.contracts.filter((x) => x.tenantId !== tenantId);
+      counts.slaContracts = before - (s.slaPolicies.length + s.contracts.length);
+    }
+    if (modules.knowledge) {
+      const before = s.knowledgeArticles.length;
+      s.knowledgeArticles = s.knowledgeArticles.filter((x) => x.tenantId !== tenantId);
+      counts.knowledgeArticles = before - s.knowledgeArticles.length;
+    }
+    if (modules.orgSites) {
+      const before = s.locations.length + s.departments.length + s.clientOrganisations.length;
+      s.locations = s.locations.filter((x) => x.tenantId !== tenantId);
+      s.departments = s.departments.filter((x) => x.tenantId !== tenantId);
+      if (modules.preserveDefaultOrg) {
+        const defaultOrg = s.clientOrganisations.find(
+          (o) => o.tenantId === tenantId && o.isDefault
+        );
+        s.clientOrganisations = s.clientOrganisations.filter(
+          (o) => o.tenantId !== tenantId || o.id === defaultOrg?.id
+        );
+      } else {
+        // Keep at least one default org so tenant workspace remains navigable
+        const firstOrg = s.clientOrganisations.find((o) => o.tenantId === tenantId);
+        s.clientOrganisations = s.clientOrganisations.filter(
+          (o) => o.tenantId !== tenantId || o.id === firstOrg?.id
+        );
+      }
+      counts.orgSites =
+        before - (s.locations.length + s.departments.length + s.clientOrganisations.length);
+    }
+    if (modules.billing) {
+      const before = s.payments.length + s.invoices.length;
+      s.payments = s.payments.filter((x) => x.tenantId !== tenantId);
+      s.invoices = s.invoices.filter((x) => x.tenantId !== tenantId);
+      counts.billing = before - (s.payments.length + s.invoices.length);
+    }
+    if (modules.integrations) {
+      const before =
+        s.customFields.length +
+        s.apiKeys.length +
+        s.webhooks.length +
+        s.webhookDeliveries.length +
+        s.scheduledReports.length;
+      s.customFields = s.customFields.filter((x) => x.tenantId !== tenantId);
+      s.apiKeys = s.apiKeys.filter((x) => x.tenantId !== tenantId);
+      s.webhooks = s.webhooks.filter((x) => x.tenantId !== tenantId);
+      s.webhookDeliveries = s.webhookDeliveries.filter((x) => x.tenantId !== tenantId);
+      s.scheduledReports = s.scheduledReports.filter((x) => x.tenantId !== tenantId);
+      counts.integrations =
+        before -
+        (s.customFields.length +
+          s.apiKeys.length +
+          s.webhooks.length +
+          s.webhookDeliveries.length +
+          s.scheduledReports.length);
+    }
+    if (modules.attachments) {
+      const before = s.attachments.length;
+      s.attachments = s.attachments.filter((x) => x.tenantId !== tenantId);
+      counts.attachments = before - s.attachments.length;
+    }
+    if (modules.auditLogs) {
+      const before = s.auditLogs.length;
+      s.auditLogs = s.auditLogs.filter((x) => x.tenantId !== tenantId);
+      counts.auditLogs = before - s.auditLogs.length;
+    }
+    return counts;
+  }
+
+  resetSingleTenantDefaults(tenantId: string): void {
+    const tenant = this.state.tenants.find((t) => t.id === tenantId);
+    if (!tenant) return;
+    const now = new Date().toISOString();
+    let defaultOrg =
+      this.state.clientOrganisations.find(
+        (o) => o.tenantId === tenantId && o.isDefault
+      ) || this.state.clientOrganisations.find((o) => o.tenantId === tenantId);
+
+    if (!defaultOrg) {
+      defaultOrg = {
+        id: tenantId === DEFAULT_TENANT_ID ? DEFAULT_ORG_ID : `org-${crypto.randomUUID().slice(0, 8)}`,
+        tenantId,
+        name: tenant.name,
+        code: 'HQ-01',
+        industry: 'Enterprise IT',
+        contactName: 'IT Operations',
+        contactEmail: tenant.supportEmail || 'support@assetvault.io',
+        contactPhone: '',
+        address: 'Headquarters',
+        status: 'active',
+        isDefault: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.state.clientOrganisations.push(defaultOrg);
+    }
+
+    this.state.locations.push({
+      id: tenantId === DEFAULT_TENANT_ID ? 'loc-default-01' : `loc-${crypto.randomUUID().slice(0, 8)}`,
+      tenantId,
+      orgId: defaultOrg.id,
+      name: 'Main Office',
+      code: 'LOC-01',
+      city: 'Accra',
+      country: tenant.country || 'Ghana',
+      address: defaultOrg.address || 'Headquarters',
+      status: 'active',
+      createdAt: now,
+    });
+
+    this.state.departments.push({
+      id: tenantId === DEFAULT_TENANT_ID ? 'dept-default-01' : `dept-${crypto.randomUUID().slice(0, 8)}`,
+      tenantId,
+      orgId: defaultOrg.id,
+      name: 'IT Infrastructure',
+      code: 'DEPT-IT',
+      managerName: 'IT Lead',
+      costCenter: 'CC-100',
+      status: 'active',
+      createdAt: now,
+    });
+
+    const priorities: Array<{
+      p: SlaPolicy['priority'];
+      fr: number;
+      res: number;
+      esc: number;
+    }> = [
+      { p: 'Urgent', fr: 15, res: 240, esc: 30 },
+      { p: 'High', fr: 60, res: 480, esc: 60 },
+      { p: 'Medium', fr: 240, res: 1440, esc: 120 },
+      { p: 'Low', fr: 480, res: 2880, esc: 240 },
+    ];
+    for (const row of priorities) {
+      this.state.slaPolicies.push({
+        id: `sla-${crypto.randomUUID().slice(0, 8)}`,
+        tenantId,
+        orgId: defaultOrg.id,
+        name: `${row.p} Default SLA`,
+        priority: row.p,
+        firstResponseMinutes: row.fr,
+        resolutionMinutes: row.res,
+        businessHoursOnly: row.p !== 'Urgent',
+        escalationMinutesBeforeBreach: row.esc,
+        isDefault: true,
+        createdAt: now,
+      });
+    }
+
+    this.state.serviceCatalogue.push({
+      id: `cat-${crypto.randomUUID().slice(0, 8)}`,
+      tenantId,
+      orgId: defaultOrg.id,
       name: 'New Laptop & Onboarding Bundle',
       category: 'Hardware',
       description: 'Provision standard workstation laptop and access credentials.',

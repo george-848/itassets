@@ -3,6 +3,7 @@ export type TenantStatus = 'active' | 'trial' | 'grace' | 'suspended';
 export type DeploymentMode = 'shared_cloud' | 'dedicated_enterprise';
 export type PlanCode = 'starter' | 'professional' | 'business' | 'enterprise';
 export type BillingCycle = 'monthly' | 'annual';
+export type CurrencyCode = 'USD' | 'GHS' | 'EUR' | 'GBP';
 
 export type TenantRole =
   | 'tenant_owner'
@@ -85,6 +86,7 @@ export interface PlanLimits {
   maxLocations: number | null;
   maxClientOrgs: number | null;
   maxTicketsPerMonth: number | null;
+  maxStorageMb?: number | null;
 }
 
 export interface SubscriptionPlan {
@@ -166,6 +168,7 @@ export interface Tenant {
   };
   supportEmail: string;
   country: string;
+  currency?: CurrencyCode;
   createdAt: string;
   updatedAt: string;
 }
@@ -558,6 +561,89 @@ export interface WorkspaceUsage {
   locationsCount: number;
   clientOrgsCount: number;
   ticketsThisMonth: number;
+  storageUsedBytes?: number;
+}
+
+export interface AttachmentItem {
+  id: string;
+  tenantId: string;
+  orgId: string;
+  entityType: 'asset' | 'maintenance' | 'ticket' | 'po' | 'contract';
+  entityId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  dataUrl: string;
+  uploadedByUserId: string;
+  uploadedByName: string;
+  createdAt: string;
+}
+
+export interface TenantApiKey {
+  id: string;
+  tenantId: string;
+  name: string;
+  keyPrefix: string;
+  scopes: string[];
+  createdBy: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+export interface WebhookEndpoint {
+  id: string;
+  tenantId: string;
+  name: string;
+  url: string;
+  events: string[];
+  active: boolean;
+  createdBy: string;
+  createdAt: string;
+  lastTriggeredAt: string | null;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  tenantId: string;
+  webhookId: string;
+  event: string;
+  statusCode: number | null;
+  ok: boolean;
+  responseSnippet: string;
+  deliveredAt: string;
+}
+
+export interface ScheduledReportConfig {
+  id: string;
+  tenantId: string;
+  orgId: string;
+  name: string;
+  reportType:
+    | 'inventory'
+    | 'maintenance'
+    | 'warranty'
+    | 'tickets'
+    | 'licences'
+    | 'depreciation';
+  frequency: 'daily' | 'weekly' | 'monthly';
+  recipients: string[];
+  enabled: boolean;
+  lastRunAt: string | null;
+  nextRunAt: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface EmailOutboxEntry {
+  id: string;
+  tenantId: string;
+  to: string;
+  subject: string;
+  bodyPreview: string;
+  status: 'sent' | 'logged_local' | 'failed';
+  error?: string;
+  sentAt: string;
 }
 
 export interface TenantContextPayload {

@@ -38,6 +38,7 @@ import type { ExtendedTenantContext } from '../lib/api.ts';
 import type { Asset, DashboardSummary } from '../types/itams.ts';
 import { AnimatedNumber } from './AnimatedNumber.tsx';
 import { formatCurrency } from './StatusText.tsx';
+import { UsageAnalyticsWidget } from './UsageAnalyticsWidget.tsx';
 
 export type NavSection =
   | 'dashboard'
@@ -47,6 +48,7 @@ export type NavSection =
   | 'maintenance'
   | 'licences'
   | 'tickets'
+  | 'employee_portal'
   | 'itsm'
   | 'sla_contracts'
   | 'kb'
@@ -57,6 +59,7 @@ export type NavSection =
   | 'org_structure'
   | 'users'
   | 'billing'
+  | 'integrations'
   | 'super_admin';
 
 interface DashboardViewProps {
@@ -359,6 +362,33 @@ export function DashboardView({
           </div>
         </div>
 
+        {/* Usage Analytics Skeleton */}
+        {tenantCtx && (
+          <div className="rounded-2xl border border-[var(--av-border)] bg-[var(--av-surface)] p-5 shadow-[var(--av-card-shadow)] space-y-4">
+            <div className="flex items-center justify-between border-b border-[var(--av-border-subtle)] pb-4">
+              <div className="space-y-1.5">
+                <div className="h-4 w-32 rounded av-shimmer" />
+                <div className="h-3 w-48 rounded av-shimmer" />
+              </div>
+              <div className="h-8 w-28 rounded-xl av-shimmer" />
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              <div className="lg:col-span-7 space-y-4">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="space-y-2">
+                    <div className="flex justify-between">
+                      <div className="h-3.5 w-28 rounded av-shimmer" />
+                      <div className="h-3.5 w-20 rounded av-shimmer" />
+                    </div>
+                    <div className="h-2 w-full rounded-full av-shimmer" />
+                  </div>
+                ))}
+              </div>
+              <div className="lg:col-span-5 h-44 rounded-xl av-shimmer" />
+            </div>
+          </div>
+        )}
+
         {/* Bento Row 2 Skeleton */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
           <div className="lg:col-span-5 rounded-2xl border border-[var(--av-border)] bg-[var(--av-surface)] p-5 shadow-[var(--av-card-shadow)] flex flex-col items-center justify-between h-88">
@@ -565,100 +595,120 @@ export function DashboardView({
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0">
-          <motion.button
-            type="button"
-            whileTap={{ scale: 0.985 }}
-            onClick={() => onNavigate('assignments')}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] px-3.5 py-2 text-xs font-semibold text-[var(--av-text-muted)] shadow-[var(--av-card-shadow)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap"
-          >
-            <ArrowLeftRight className="h-3.5 w-3.5 text-[var(--av-teal)]" />
-            <span>New Handover</span>
-          </motion.button>
-          <motion.button
-            type="button"
-            whileTap={{ scale: 0.985 }}
-            onClick={() => onNavigate('assets')}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white shadow-[0_6px_16px_-4px_var(--av-accent-shadow)] hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>Register Asset</span>
-          </motion.button>
-        </div>
+        {!tenantCtx?.isReadOnlyGraceOrExpired && (
+          <div className="flex items-center gap-2.5 shrink-0">
+            {(!tenantCtx || tenantCtx.permissions.includes('assignments.manage')) && (
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.985 }}
+                onClick={() => onNavigate('assignments')}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] px-3.5 py-2 text-xs font-semibold text-[var(--av-text-muted)] shadow-[var(--av-card-shadow)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap"
+              >
+                <ArrowLeftRight className="h-3.5 w-3.5 text-[var(--av-teal)]" />
+                <span>New Handover</span>
+              </motion.button>
+            )}
+            {(!tenantCtx || tenantCtx.permissions.includes('assets.create')) && (
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.985 }}
+                onClick={() => onNavigate('assets')}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white shadow-[0_6px_16px_-4px_var(--av-accent-shadow)] hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Register Asset</span>
+              </motion.button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Compact SaaS & ITSM Operational Strip */}
       {tenantCtx && (
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-          <button
-            type="button"
-            onClick={() => onNavigate('tickets')}
-            className="text-left rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-3 shadow-[var(--av-card-shadow)] hover:border-[var(--av-accent)]/40 transition-colors flex items-center justify-between gap-2"
-          >
-            <div className="min-w-0">
-              <div className="text-[11px] font-medium text-[var(--av-text-subtle)] truncate">
-                Open Tickets
-              </div>
-              <div className="mt-0.5 font-display text-lg font-bold text-[var(--av-text)] tabular-nums">
-                {counts.openTickets ?? 0}
-              </div>
-            </div>
-            <LifeBuoy className="h-4.5 w-4.5 text-[#3B66F6] shrink-0" />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onNavigate('sla_contracts')}
-            className="text-left rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-3 shadow-[var(--av-card-shadow)] hover:border-rose-500/40 transition-colors flex items-center justify-between gap-2"
-          >
-            <div className="min-w-0">
-              <div className="text-[11px] font-medium text-[var(--av-text-subtle)] truncate">
-                SLA Breached
-              </div>
-              <div
-                className={`mt-0.5 font-display text-lg font-bold tabular-nums ${
-                  (counts.slaBreachedTickets ?? 0) > 0
-                    ? 'text-rose-600 dark:text-rose-400'
-                    : 'text-[var(--av-text)]'
-                }`}
+          {tenantCtx.effectiveFeatures.includes('helpdesk') &&
+            tenantCtx.permissions.includes('tickets.read') && (
+              <button
+                type="button"
+                onClick={() => onNavigate('tickets')}
+                className="text-left rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-3 shadow-[var(--av-card-shadow)] hover:border-[var(--av-accent)]/40 transition-colors flex items-center justify-between gap-2"
               >
-                {counts.slaBreachedTickets ?? 0}
-              </div>
-            </div>
-            <ShieldAlert className="h-4.5 w-4.5 text-rose-500 shrink-0" />
-          </button>
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium text-[var(--av-text-subtle)] truncate">
+                    Open Tickets
+                  </div>
+                  <div className="mt-0.5 font-display text-lg font-bold text-[var(--av-text)] tabular-nums">
+                    {counts.openTickets ?? 0}
+                  </div>
+                </div>
+                <LifeBuoy className="h-4.5 w-4.5 text-[#3B66F6] shrink-0" />
+              </button>
+            )}
 
-          <button
-            type="button"
-            onClick={() => onNavigate('licences')}
-            className="text-left rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-3 shadow-[var(--av-card-shadow)] hover:border-[var(--av-accent)]/40 transition-colors flex items-center justify-between gap-2"
-          >
-            <div className="min-w-0">
-              <div className="text-[11px] font-medium text-[var(--av-text-subtle)] truncate">
-                Software Licences
-              </div>
-              <div className="mt-0.5 font-display text-lg font-bold text-[var(--av-text)] tabular-nums">
-                {counts.activeLicences ?? 0}
-              </div>
-            </div>
-            <KeyRound className="h-4.5 w-4.5 text-[#1AB394] shrink-0" />
-          </button>
+          {tenantCtx.effectiveFeatures.includes('sla_automation') &&
+            (tenantCtx.permissions.includes('sla.read') ||
+              tenantCtx.permissions.includes('contracts.read')) && (
+              <button
+                type="button"
+                onClick={() => onNavigate('sla_contracts')}
+                className="text-left rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-3 shadow-[var(--av-card-shadow)] hover:border-rose-500/40 transition-colors flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium text-[var(--av-text-subtle)] truncate">
+                    SLA Breached
+                  </div>
+                  <div
+                    className={`mt-0.5 font-display text-lg font-bold tabular-nums ${
+                      (counts.slaBreachedTickets ?? 0) > 0
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : 'text-[var(--av-text)]'
+                    }`}
+                  >
+                    {counts.slaBreachedTickets ?? 0}
+                  </div>
+                </div>
+                <ShieldAlert className="h-4.5 w-4.5 text-rose-500 shrink-0" />
+              </button>
+            )}
 
-          <button
-            type="button"
-            onClick={() => onNavigate('sla_contracts')}
-            className="text-left rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-3 shadow-[var(--av-card-shadow)] hover:border-[var(--av-accent)]/40 transition-colors flex items-center justify-between gap-2"
-          >
-            <div className="min-w-0">
-              <div className="text-[11px] font-medium text-[var(--av-text-subtle)] truncate">
-                {tenantCtx.tenant.type === 'msp' ? 'Client Retainers' : 'Service Contracts'}
-              </div>
-              <div className="mt-0.5 font-display text-lg font-bold text-[var(--av-text)] tabular-nums">
-                {counts.activeContracts ?? 0}
-              </div>
-            </div>
-            <FileCheck2 className="h-4.5 w-4.5 text-indigo-500 shrink-0" />
-          </button>
+          {tenantCtx.effectiveFeatures.includes('software_licences') &&
+            tenantCtx.permissions.includes('licences.read') && (
+              <button
+                type="button"
+                onClick={() => onNavigate('licences')}
+                className="text-left rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-3 shadow-[var(--av-card-shadow)] hover:border-[var(--av-accent)]/40 transition-colors flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium text-[var(--av-text-subtle)] truncate">
+                    Software Licences
+                  </div>
+                  <div className="mt-0.5 font-display text-lg font-bold text-[var(--av-text)] tabular-nums">
+                    {counts.activeLicences ?? 0}
+                  </div>
+                </div>
+                <KeyRound className="h-4.5 w-4.5 text-[#1AB394] shrink-0" />
+              </button>
+            )}
+
+          {tenantCtx.effectiveFeatures.includes('sla_automation') &&
+            (tenantCtx.permissions.includes('sla.read') ||
+              tenantCtx.permissions.includes('contracts.read')) && (
+              <button
+                type="button"
+                onClick={() => onNavigate('sla_contracts')}
+                className="text-left rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] px-4 py-3 shadow-[var(--av-card-shadow)] hover:border-[var(--av-accent)]/40 transition-colors flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium text-[var(--av-text-subtle)] truncate">
+                    {tenantCtx.tenant.type === 'msp' ? 'Client Retainers' : 'Service Contracts'}
+                  </div>
+                  <div className="mt-0.5 font-display text-lg font-bold text-[var(--av-text)] tabular-nums">
+                    {counts.activeContracts ?? 0}
+                  </div>
+                </div>
+                <FileCheck2 className="h-4.5 w-4.5 text-indigo-500 shrink-0" />
+              </button>
+            )}
 
           <button
             type="button"
@@ -959,6 +1009,11 @@ export function DashboardView({
           </div>
         </motion.div>
       </div>
+
+      {/* PLAN QUOTA USAGE ANALYTICS WIDGET */}
+      {tenantCtx && (
+        <UsageAnalyticsWidget tenantCtx={tenantCtx} onNavigate={onNavigate} />
+      )}
 
       {/* BENTO ROW 2: Signature Rounded Segmented Donut (5 cols) | Asset Distribution by Category (7 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">

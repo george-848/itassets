@@ -131,6 +131,9 @@ export function UsersView({
     loadInvitations();
   }, [users.length]);
 
+  const isReadOnly = Boolean(tenantCtx?.isReadOnlyGraceOrExpired);
+  const canManageUsers =
+    !isReadOnly && (tenantCtx ? tenantCtx.permissions.includes('users.manage') : true);
   const availableOrgs = tenantCtx?.availableOrgs ?? [];
   const maxUsers = tenantCtx?.effectiveLimits.maxUsers ?? null;
 
@@ -486,25 +489,27 @@ export function UsersView({
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2.5 shrink-0">
-          <button
-            type="button"
-            onClick={() => setInviteOpen(true)}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3.5 py-2 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap"
-          >
-            <MailPlus className="h-3.5 w-3.5 text-[#1AB394]" />
-            <span>Invite Member</span>
-          </button>
-          <motion.button
-            whileTap={{ scale: 0.985 }}
-            type="button"
-            onClick={openCreate}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Add User</span>
-          </motion.button>
-        </div>
+        {canManageUsers && (
+          <div className="flex items-center justify-end gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setInviteOpen(true)}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3.5 py-2 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap"
+            >
+              <MailPlus className="h-3.5 w-3.5 text-[#1AB394]" />
+              <span>Invite Member</span>
+            </button>
+            <motion.button
+              whileTap={{ scale: 0.985 }}
+              type="button"
+              onClick={openCreate}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Add User</span>
+            </motion.button>
+          </div>
+        )}
       </div>
 
       {activeTab === 'accounts' ? (
@@ -575,8 +580,8 @@ export function UsersView({
                         icon={Users}
                         title="No user accounts match filters"
                         description="Adjust search criteria or provision a new workspace account."
-                        actionLabel={users.length === 0 ? 'Add User' : undefined}
-                        onAction={users.length === 0 ? openCreate : undefined}
+                        actionLabel={canManageUsers && users.length === 0 ? 'Add User' : undefined}
+                        onAction={canManageUsers && users.length === 0 ? openCreate : undefined}
                       />
                     </td>
                   </tr>
@@ -654,26 +659,30 @@ export function UsersView({
                             : 'Never'}
                         </td>
                         <td className="py-3 px-4 text-right whitespace-nowrap">
-                          <div className="inline-flex items-center justify-end gap-1">
-                            <button
-                              type="button"
-                              onClick={() => openEdit(u)}
-                              title="Edit user"
-                              className="p-1.5 rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/15 transition-colors"
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </button>
-                            {u.id !== currentUserId && (
+                          {canManageUsers ? (
+                            <div className="inline-flex items-center justify-end gap-1">
                               <button
                                 type="button"
-                                onClick={() => setDeleteTarget(u)}
-                                title="Delete user"
-                                className="p-1.5 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/15 transition-colors"
+                                onClick={() => openEdit(u)}
+                                title="Edit user"
+                                className="p-1.5 rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/15 transition-colors"
                               >
-                                <Trash2 className="h-4 w-4" />
+                                <Pencil className="h-4 w-4" />
                               </button>
-                            )}
-                          </div>
+                              {u.id !== currentUserId && (
+                                <button
+                                  type="button"
+                                  onClick={() => setDeleteTarget(u)}
+                                  title="Delete user"
+                                  className="p-1.5 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/15 transition-colors"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-[var(--av-text-subtle)]">View only</span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -699,8 +708,8 @@ export function UsersView({
               icon={MailPlus}
               title="No workspace invitations sent yet"
               description="Invite technicians, auditors, or department managers with scoped role access."
-              actionLabel="Invite Member"
-              onAction={() => setInviteOpen(true)}
+              actionLabel={canManageUsers ? 'Invite Member' : undefined}
+              onAction={canManageUsers ? () => setInviteOpen(true) : undefined}
             />
           ) : (
             <div className="overflow-x-auto">
@@ -739,14 +748,18 @@ export function UsersView({
                         {inv.expiresAt.slice(0, 10)}
                       </td>
                       <td className="py-3 px-4 text-right whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => setDeleteInviteTarget(inv)}
-                          title="Revoke / delete invitation"
-                          className="p-1.5 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/15 transition-colors"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        {canManageUsers ? (
+                          <button
+                            type="button"
+                            onClick={() => setDeleteInviteTarget(inv)}
+                            title="Revoke / delete invitation"
+                            className="p-1.5 rounded-md text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/15 transition-colors"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-[var(--av-text-subtle)]">View only</span>
+                        )}
                       </td>
                     </tr>
                   ))}

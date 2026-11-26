@@ -49,9 +49,10 @@ describe('Firestore Security Rules Policy Assertions', () => {
     }
   });
 
-  it('locks down auditLogs, assetTransfers, and ticket comments against mutation/deletion', () => {
+  it('locks down auditLogs, platformAuditLogs, assetTransfers, and ticket comments as strictly immutable append-only ledgers', () => {
     assert.match(rulesText, /match \/auditLogs\/\{docId\}[\s\S]*allow update, delete: if false;/);
-    assert.match(rulesText, /match \/assetTransfers\/\{docId\}[\s\S]*allow update: if false;/);
+    assert.match(rulesText, /match \/platformAuditLogs\/\{logId\}[\s\S]*allow update, delete: if false;/);
+    assert.match(rulesText, /match \/assetTransfers\/\{docId\}[\s\S]*allow update: if false;[\s\S]*allow delete: if false;/);
     assert.match(rulesText, /match \/comments\/\{commentId\}[\s\S]*allow update, delete: if false;/);
   });
 

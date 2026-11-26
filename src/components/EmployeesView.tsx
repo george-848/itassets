@@ -12,7 +12,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { api, ApiError } from '../lib/api.ts';
+import { api, ApiError, type ExtendedTenantContext } from '../lib/api.ts';
 import {
   DEPARTMENTS,
   type Asset,
@@ -21,12 +21,14 @@ import {
   type UserRole,
 } from '../types/itams.ts';
 import { ConfirmDialog } from './ConfirmDialog.tsx';
+import { CustomFieldInputs, CustomFieldValuesDisplay } from './CustomFieldsSection.tsx';
 import { DataPagination } from './ui/DataPagination.tsx';
 import { EmptyState } from './ui/EmptyState.tsx';
 
 interface EmployeesViewProps {
   employees: Employee[];
   userRole: UserRole;
+  tenantCtx?: ExtendedTenantContext | null;
   onRefresh: () => Promise<void>;
   onToast: (type: 'success' | 'error', message: string) => void;
   onRequestAssignToEmployee: (employee: Employee) => void;
@@ -62,10 +64,17 @@ const INPUT_CLASS =
 export function EmployeesView({
   employees,
   userRole,
+  tenantCtx,
   onRefresh,
   onToast,
   onRequestAssignToEmployee,
 }: EmployeesViewProps) {
+  const isReadOnly = Boolean(tenantCtx?.isReadOnlyGraceOrExpired);
+  const hasCustomFields = !tenantCtx || tenantCtx.effectiveFeatures.includes('custom_fields');
+  const perms = tenantCtx?.permissions;
+  const canManage = !isReadOnly && (perms ? perms.includes('employees.manage') : true);
+  const canDelete = !isReadOnly && (perms ? perms.includes('employees.manage') && userRole === 'admin' : userRole === 'admin');
+  const canAssign = !isReadOnly && (perms ? perms.includes('assignments.manage') : true);
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'active' | 'inactive'>('ALL');
@@ -77,6 +86,7 @@ export function EmployeesView({
   const [formOpen, setFormOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [form, setForm] = useState<EmployeeFormState>(EMPTY_EMP);
+  const [customValues, setCustomValues] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -155,12 +165,20 @@ export function EmployeesView({
   const openCreate = () => {
     setEditingEmployee(null);
     setForm(EMPTY_EMP);
+    setCustomValues({});
     setFormError(null);
     setFormOpen(true);
   };
 
   const openEdit = (emp: Employee) => {
     setEditingEmployee(emp);
+    setCustomValues({});
+    if (hasCustomFields) {
+      void api
+        .getCustomFieldValues('employee', emp.id)
+        .then((res) => setCustomValues(res.values))
+        .catch(() => {});
+    }
     setForm({
       employee_code: emp.employee_code,
       full_name: emp.full_name,
@@ -192,12 +210,17 @@ export function EmployeesView({
 
     setSubmitting(true);
     try {
+      let savedId = editingEmployee?.id;
       if (editingEmployee) {
         await api.updateEmployee(editingEmployee.id, form);
         onToast('success', `Employee ${form.full_name} updated.`);
       } else {
-        await api.createEmployee(form);
+        const created = await api.createEmployee(form);
+        savedId = created.employee.id;
         onToast('success', `Employee ${form.full_name} registered.`);
+      }
+      if (hasCustomFields && savedId && Object.keys(customValues).length > 0) {
+        await api.saveCustomFieldValues('employee', savedId, customValues).catch(() => {});
       }
       setFormOpen(false);
       await onRefresh();
@@ -279,15 +302,17 @@ export function EmployeesView({
           <span className="text-xs font-medium text-[var(--av-text-subtle)] tabular-nums whitespace-nowrap">
             {filtered.length} of {employees.length} employees
           </span>
-          <motion.button
-            type="button"
-            whileTap={{ scale: 0.985 }}
-            onClick={openCreate}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap shrink-0"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Register Employee</span>
-          </motion.button>
+          {canManage && (
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.985 }}
+              onClick={openCreate}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap shrink-0"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Register Employee</span>
+            </motion.button>
+          )}
         </div>
       </div>
 
@@ -351,8 +376,8 @@ export function EmployeesView({
                       icon={Users}
                       title="No matching employees found"
                       description="Adjust filters or register a new employee profile in the corporate directory."
-                      actionLabel={employees.length === 0 ? 'Register Employee' : undefined}
-                      onAction={employees.length === 0 ? openCreate : undefined}
+                      actionLabel={canManage && employees.length === 0 ? 'Register Employee' : undefined}
+                      onAction={canManage && employees.length === 0 ? openCreate : undefined}
                     />
                   </td>
                 </tr>
@@ -410,7 +435,7 @@ export function EmployeesView({
                         >
                           <Eye className="h-4 w-4" />
                         </button>
-                        {emp.status === 'active' && (
+                        {canAssign && emp.status === 'active' && (
                           <button
                             type="button"
                             onClick={() => onRequestAssignToEmployee(emp)}
@@ -420,15 +445,17 @@ export function EmployeesView({
                             <UserPlus className="h-4 w-4" />
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => openEdit(emp)}
-                          title="Edit employee"
-                          className="p-1.5 rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/15 transition-colors"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        {userRole === 'admin' && (
+                        {canManage && (
+                          <button
+                            type="button"
+                            onClick={() => openEdit(emp)}
+                            title="Edit employee"
+                            className="p-1.5 rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/15 transition-colors"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                        )}
+                        {canDelete && (
                           <button
                             type="button"
                             onClick={() => setDeleteTarget(emp)}
@@ -634,6 +661,14 @@ export function EmployeesView({
                   </div>
                 </div>
 
+                {hasCustomFields && (
+                  <CustomFieldInputs
+                    entityType="employee"
+                    values={customValues}
+                    onChange={setCustomValues}
+                  />
+                )}
+
                 <div className="flex items-center justify-end gap-2.5 border-t border-[var(--av-border-subtle)] pt-4">
                   <button
                     type="button"
@@ -704,7 +739,7 @@ export function EmployeesView({
               </div>
 
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                {detailEmployee.status === 'active' && (
+                {canAssign && detailEmployee.status === 'active' && (
                   <div>
                     <button
                       type="button"
@@ -747,6 +782,10 @@ export function EmployeesView({
                     </div>
                   </div>
                 </div>
+
+                {hasCustomFields && (
+                  <CustomFieldValuesDisplay entityType="employee" entityId={detailEmployee.id} />
+                )}
 
                 <div>
                   <h4 className="font-display text-sm font-semibold text-[var(--av-text)] mb-2.5">

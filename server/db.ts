@@ -94,6 +94,11 @@ export interface ItamsDatabase {
     returnStatus: 'Available' | 'Under Maintenance' | 'Damaged';
     notes: string;
   }): Promise<AssetAssignment>;
+  updateAssignment(
+    id: string,
+    patch: Partial<Pick<AssetAssignment, 'condition_out' | 'condition_in' | 'notes' | 'assigned_date' | 'returned_date' | 'status'>>
+  ): Promise<AssetAssignment | null>;
+  deleteAssignment(id: string): Promise<boolean>;
 
   // Maintenance
   listMaintenanceLogs(scope?: TenantScopeFilter): Promise<MaintenanceLog[]>;
@@ -866,6 +871,51 @@ class MongoItamsDatabase implements ItamsDatabase {
       }
     );
     return (await this.getAssignmentById(params.assignmentId))!;
+  }
+
+  async updateAssignment(
+    id: string,
+    patch: Partial<
+      Pick<
+        AssetAssignment,
+        'condition_out' | 'condition_in' | 'notes' | 'assigned_date' | 'returned_date' | 'status'
+      >
+    >
+  ): Promise<AssetAssignment | null> {
+    const existing = await this.db
+      .collection<AssetAssignment>('assignments')
+      .findOne({ id }, { projection: { _id: 0 } });
+    if (!existing) return null;
+    const safePatch: Record<string, unknown> = {};
+    for (const key of ['condition_out', 'condition_in', 'notes', 'assigned_date', 'returned_date', 'status'] as const) {
+      if (patch[key] !== undefined) safePatch[key] = patch[key];
+    }
+    if (Object.keys(safePatch).length > 0) {
+      await this.db.collection('assignments').updateOne({ id }, { $set: safePatch });
+    }
+    return this.getAssignmentById(id);
+  }
+
+  async deleteAssignment(id: string): Promise<boolean> {
+    const existing = await this.db
+      .collection<AssetAssignment>('assignments')
+      .findOne({ id }, { projection: { _id: 0 } });
+    if (!existing) return false;
+    const res = await this.db.collection('assignments').deleteOne({ id });
+    if (existing.status === 'Active') {
+      await this.db.collection('assets').updateOne(
+        { id: existing.asset_id, assigned_employee_id: existing.employee_id },
+        {
+          $set: {
+            status: 'Available',
+            assigned_employee_id: null,
+            assigned_date: null,
+            updated_at: new Date().toISOString(),
+          },
+        }
+      );
+    }
+    return res.deletedCount > 0;
   }
 
   async listMaintenanceLogs(scope?: TenantScopeFilter): Promise<MaintenanceLog[]> {
@@ -1748,6 +1798,53 @@ class SqliteItamsDatabase implements ItamsDatabase {
       .run(params.returnStatus, now, existing.asset_id);
 
     return (await this.getAssignmentById(params.assignmentId))!;
+  }
+
+  async updateAssignment(
+    id: string,
+    patch: Partial<
+      Pick<
+        AssetAssignment,
+        'condition_out' | 'condition_in' | 'notes' | 'assigned_date' | 'returned_date' | 'status'
+      >
+    >
+  ): Promise<AssetAssignment | null> {
+    const existing = this.db
+      .prepare('SELECT * FROM assignments WHERE id = ?')
+      .get(id) as unknown as AssetAssignment | undefined;
+    if (!existing) return null;
+    this.db
+      .prepare(
+        `UPDATE assignments
+         SET condition_out = ?, condition_in = ?, notes = ?, assigned_date = ?, returned_date = ?, status = ?
+         WHERE id = ?`
+      )
+      .run(
+        patch.condition_out ?? existing.condition_out,
+        patch.condition_in !== undefined ? patch.condition_in : existing.condition_in,
+        patch.notes !== undefined ? patch.notes : existing.notes,
+        patch.assigned_date ?? existing.assigned_date,
+        patch.returned_date !== undefined ? patch.returned_date : existing.returned_date,
+        patch.status ?? existing.status,
+        id
+      );
+    return this.getAssignmentById(id);
+  }
+
+  async deleteAssignment(id: string): Promise<boolean> {
+    const existing = this.db
+      .prepare('SELECT * FROM assignments WHERE id = ?')
+      .get(id) as unknown as AssetAssignment | undefined;
+    if (!existing) return false;
+    const res = this.db.prepare('DELETE FROM assignments WHERE id = ?').run(id);
+    if (existing.status === 'Active') {
+      this.db
+        .prepare(
+          "UPDATE assets SET status = 'Available', assigned_employee_id = NULL, assigned_date = NULL, updated_at = ? WHERE id = ? AND assigned_employee_id = ?"
+        )
+        .run(new Date().toISOString(), existing.asset_id, existing.employee_id);
+    }
+    return Number(res.changes) > 0;
   }
 
   async listMaintenanceLogs(scope?: TenantScopeFilter): Promise<MaintenanceLog[]> {

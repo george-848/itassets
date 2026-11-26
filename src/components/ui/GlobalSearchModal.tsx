@@ -13,7 +13,7 @@ import type {
   Employee,
   MaintenanceLog,
 } from '../../types/itams.ts';
-import type { PermissionCode } from '../../types/saas.ts';
+import type { FeatureKey, PermissionCode } from '../../types/saas.ts';
 import type { NavSection } from '../DashboardView.tsx';
 
 interface GlobalSearchModalProps {
@@ -24,6 +24,7 @@ interface GlobalSearchModalProps {
   maintenanceLogs: MaintenanceLog[];
   userRole: 'admin' | 'staff';
   permissions?: PermissionCode[];
+  effectiveFeatures?: FeatureKey[];
   isSuperAdmin?: boolean;
   onOpenAsset: (assetId: string) => void;
   onNavigate: (section: NavSection) => void;
@@ -37,6 +38,7 @@ export function GlobalSearchModal({
   maintenanceLogs,
   userRole,
   permissions = [],
+  effectiveFeatures = [],
   isSuperAdmin = false,
   onOpenAsset,
   onNavigate,
@@ -69,6 +71,8 @@ export function GlobalSearchModal({
     const q = query.trim().toLowerCase();
     const hasPerm = (p: PermissionCode) =>
       permissions.length === 0 ? userRole === 'admin' : permissions.includes(p);
+    const hasFeature = (f: FeatureKey) =>
+      effectiveFeatures.length === 0 ? true : effectiveFeatures.includes(f);
 
     const matchedAssets = assets
       .filter((a) => {
@@ -117,15 +121,15 @@ export function GlobalSearchModal({
       { id: 'employees', label: 'Employees', desc: 'Staff directory & custody', visible: hasPerm('employees.read') },
       { id: 'assignments', label: 'Assignments & Returns', desc: 'Issue or return equipment', visible: hasPerm('assignments.read') },
       { id: 'maintenance', label: 'Maintenance', desc: 'Service tickets & repairs', visible: hasPerm('maintenance.read') },
-      { id: 'licences', label: 'Software & Licences', desc: 'Seat tracking & renewals', visible: hasPerm('licences.read') },
-      { id: 'tickets', label: 'Helpdesk Tickets', desc: 'Support queue & SLA timers', visible: hasPerm('tickets.read') },
-      { id: 'itsm', label: 'ITSM Suite', desc: 'Incidents, problems, CAB changes & catalogue', visible: hasPerm('itsm.read') },
-      { id: 'sla_contracts', label: 'SLA & Contracts', desc: 'SLA targets & client retainers', visible: hasPerm('sla.read') || hasPerm('contracts.read') },
-      { id: 'kb', label: 'Knowledge Base', desc: 'Self-service guides & internal runbooks', visible: hasPerm('kb.read') },
-      { id: 'procurement', label: 'Procurement', desc: 'Vendors, purchase requests & PO receiving', visible: hasPerm('procurement.read') },
+      { id: 'licences', label: 'Software & Licences', desc: 'Seat tracking & renewals', visible: hasPerm('licences.read') && hasFeature('software_licences') },
+      { id: 'tickets', label: 'Helpdesk Tickets', desc: 'Support queue & SLA timers', visible: hasPerm('tickets.read') && hasFeature('helpdesk') },
+      { id: 'itsm', label: 'ITSM Suite', desc: 'Incidents, problems, CAB changes & catalogue', visible: hasPerm('itsm.read') && hasFeature('itsm_suite') },
+      { id: 'sla_contracts', label: 'SLA & Contracts', desc: 'SLA targets & client retainers', visible: (hasPerm('sla.read') || hasPerm('contracts.read')) && hasFeature('sla_automation') },
+      { id: 'kb', label: 'Knowledge Base', desc: 'Self-service guides & internal runbooks', visible: hasPerm('kb.read') && hasFeature('knowledge_base') },
+      { id: 'procurement', label: 'Procurement', desc: 'Vendors, purchase requests & PO receiving', visible: hasPerm('procurement.read') && hasFeature('procurement') },
       { id: 'reports', label: 'Reports & Exports', desc: 'PDF & Excel audit exports', visible: hasPerm('reports.read') },
       { id: 'notifications', label: 'Notifications', desc: 'Warranty, SLA & licence alerts', visible: true },
-      { id: 'audit_logs', label: 'Audit Logs', desc: 'Immutable workspace activity trail', visible: hasPerm('audit.read') },
+      { id: 'audit_logs', label: 'Audit Logs', desc: 'Immutable workspace activity trail', visible: hasPerm('audit.read') && hasFeature('audit_logs') },
       { id: 'org_structure', label: 'Org Structure', desc: 'Client orgs, locations & departments', visible: hasPerm('org.read') },
       { id: 'users', label: 'User Management', desc: 'Accounts, roles & invitations', visible: hasPerm('users.read') },
       { id: 'billing', label: 'Subscription & Billing', desc: 'GH₵ plans, Paystack & invoices', visible: hasPerm('billing.read') },
@@ -142,7 +146,7 @@ export function GlobalSearchModal({
       );
 
     return { matchedAssets, matchedEmployees, matchedMaintenance, navShortcuts };
-  }, [query, assets, employees, maintenanceLogs, userRole, permissions, isSuperAdmin]);
+  }, [query, assets, employees, maintenanceLogs, userRole, permissions, effectiveFeatures, isSuperAdmin]);
 
   const hasAny =
     results.matchedAssets.length > 0 ||

@@ -21,6 +21,7 @@ interface NotificationsViewProps {
   onOpenAsset: (assetId: string) => void;
   onOpenMaintenance: () => void;
   onNavigate?: (section: NavSection) => void;
+  canNavigate?: (section: NavSection) => boolean;
   onToast: (type: 'success' | 'error', message: string) => void;
 }
 
@@ -30,6 +31,7 @@ export function NotificationsView({
   onOpenAsset,
   onOpenMaintenance,
   onNavigate,
+  canNavigate,
   onToast,
 }: NotificationsViewProps) {
   const [filter, setFilter] = useState<'ALL' | 'UNREAD' | NotificationType>('ALL');
@@ -195,6 +197,22 @@ export function NotificationsView({
                           ? 'Open Billing'
                           : 'Inspect Asset';
 
+                const targetSection: NavSection | null =
+                  n.entity_type === 'maintenance'
+                    ? 'maintenance'
+                    : n.entity_type === 'ticket'
+                      ? 'tickets'
+                      : n.entity_type === 'licence'
+                        ? 'licences'
+                        : n.entity_type === 'subscription'
+                          ? 'billing'
+                          : n.asset_id
+                            ? 'assets'
+                            : null;
+                const canOpenTarget = Boolean(
+                  targetSection && (!canNavigate || canNavigate(targetSection))
+                );
+
                 return (
                   <div
                     key={n.id}
@@ -252,14 +270,16 @@ export function NotificationsView({
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-                      <button
-                        type="button"
-                        onClick={openTarget}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-1.5 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap"
-                      >
-                        <span>{openLabel}</span>
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </button>
+                      {canOpenTarget && (
+                        <button
+                          type="button"
+                          onClick={openTarget}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--av-border)] bg-[var(--av-surface)] px-3 py-1.5 text-xs font-medium text-[var(--av-text-muted)] hover:bg-[var(--av-surface-hover)] hover:text-[var(--av-text)] transition-colors whitespace-nowrap"
+                        >
+                          <span>{openLabel}</span>
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </button>
+                      )}
 
                       {!n.acknowledged && (
                         <motion.button

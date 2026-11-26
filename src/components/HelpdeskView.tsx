@@ -26,6 +26,8 @@ import type {
   TicketPriority,
   TicketStatus,
 } from '../types/saas.ts';
+import { AttachmentsPanel } from './AttachmentsPanel.tsx';
+import { CustomFieldInputs, CustomFieldValuesDisplay } from './CustomFieldsSection.tsx';
 import { DataPagination } from './ui/DataPagination.tsx';
 import { EmptyState } from './ui/EmptyState.tsx';
 
@@ -103,6 +105,7 @@ export function HelpdeskView({
   const [priority, setPriority] = useState<TicketPriority>('Medium');
   const [assetId, setAssetId] = useState('');
   const [orgId, setOrgId] = useState('');
+  const [customValues, setCustomValues] = useState<Record<string, string>>({});
   const [creating, setCreating] = useState(false);
 
   const [detailTicket, setDetailTicket] = useState<Ticket | null>(null);
@@ -115,11 +118,14 @@ export function HelpdeskView({
   const [csatHover, setCsatHover] = useState(0);
   const [csatFeedback, setCsatFeedback] = useState('');
 
+  const isReadOnly = Boolean(tenantCtx?.isReadOnlyGraceOrExpired);
+  const hasCustomFields = !tenantCtx || tenantCtx.effectiveFeatures.includes('custom_fields');
+
   const perms = tenantCtx?.permissions ?? [];
-  const canCreate = perms.includes('tickets.create');
-  const canAssign = perms.includes('tickets.assign');
-  const canResolve = perms.includes('tickets.resolve');
-  const canInternalNotes = perms.includes('tickets.internal_notes');
+  const canCreate = !isReadOnly && perms.includes('tickets.create');
+  const canAssign = !isReadOnly && perms.includes('tickets.assign');
+  const canResolve = !isReadOnly && perms.includes('tickets.resolve');
+  const canInternalNotes = !isReadOnly && perms.includes('tickets.internal_notes');
 
   const loadTickets = async () => {
     setLoading(true);
@@ -166,7 +172,7 @@ export function HelpdeskView({
     if (!subject.trim() || !description.trim()) return;
     setCreating(true);
     try {
-      await api.createTicket({
+      const created = await api.createTicket({
         subject: subject.trim(),
         description: description.trim(),
         category,
@@ -174,11 +180,17 @@ export function HelpdeskView({
         assetId: assetId || null,
         orgId: orgId || undefined,
       });
+      if (hasCustomFields && Object.keys(customValues).length > 0) {
+        await api
+          .saveCustomFieldValues('ticket', created.ticket.id, customValues)
+          .catch(() => {});
+      }
       onToast('success', 'Support ticket opened with SLA tracking.');
       setCreateOpen(false);
       setSubject('');
       setDescription('');
       setAssetId('');
+      setCustomValues({});
       await Promise.all([loadTickets(), onRefresh()]);
     } catch (err) {
       if (isBlockedErr(err) && onPlanBlocked) {
@@ -645,6 +657,13 @@ export function HelpdeskView({
                     className={INPUT_CLASS}
                   />
                 </div>
+                {hasCustomFields && (
+                  <CustomFieldInputs
+                    entityType="ticket"
+                    values={customValues}
+                    onChange={setCustomValues}
+                  />
+                )}
                 <div className="flex justify-end gap-2 pt-2 border-t border-[var(--av-border-subtle)]">
                   <button
                     type="button"
@@ -738,6 +757,18 @@ export function HelpdeskView({
                   </div>
                 </div>
 
+                {hasCustomFields && (
+                  <CustomFieldValuesDisplay entityType="ticket" entityId={detailTicket.id} />
+                )}
+
+                <AttachmentsPanel
+                  entityType="ticket"
+                  entityId={detailTicket.id}
+                  orgId={detailTicket.orgId}
+                  canWrite={!isReadOnly && (canCreate || canAssign || canResolve)}
+                  onToast={onToast}
+                />
+
                 {/* Staff Workflow Controls */}
                 {(canAssign || canResolve) && (
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-xl border border-[var(--av-border)] bg-[var(--av-surface-muted)]/60 p-4">
@@ -803,7 +834,8 @@ export function HelpdeskView({
                 )}
 
                 {/* CSAT Rating (when Resolved/Closed) */}
-                {(detailTicket.status === 'Resolved' || detailTicket.status === 'Closed') &&
+                {!isReadOnly &&
+                  (detailTicket.status === 'Resolved' || detailTicket.status === 'Closed') &&
                   (detailTicket.requesterId === currentUserId || canResolve) && (
                     <div className="rounded-xl border border-[var(--av-border)] p-4 space-y-2.5">
                       <div className="flex items-center justify-between">
@@ -894,44 +926,46 @@ export function HelpdeskView({
                     )}
                   </div>
 
-                  <form onSubmit={handleSendComment} className="space-y-2.5 pt-2 border-t border-[var(--av-border-subtle)]">
-                    <textarea
-                      rows={2}
-                      required
-                      value={commentBody}
-                      onChange={(e) => setCommentBody(e.target.value)}
-                      placeholder={
-                        isInternalNote
-                          ? 'Write an internal technician note (hidden from employees)...'
-                          : 'Write a reply to the requester...'
-                      }
-                      className={INPUT_CLASS}
-                    />
-                    <div className="flex items-center justify-between gap-3">
-                      {canInternalNotes ? (
-                        <label className="inline-flex items-center gap-2 text-xs text-[var(--av-text-muted)] cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={isInternalNote}
-                            onChange={(e) => setIsInternalNote(e.target.checked)}
-                            className="rounded border-[var(--av-border)]"
-                          />
-                          <Lock className="h-3.5 w-3.5 text-amber-500" />
-                          <span>Internal technician note</span>
-                        </label>
-                      ) : (
-                        <span />
-                      )}
-                      <button
-                        type="submit"
-                        disabled={sendingComment}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] disabled:opacity-60"
-                      >
-                        <Send className="h-3.5 w-3.5" />
-                        <span>{sendingComment ? 'Posting...' : 'Post Comment'}</span>
-                      </button>
-                    </div>
-                  </form>
+                  {!isReadOnly && (
+                    <form onSubmit={handleSendComment} className="space-y-2.5 pt-2 border-t border-[var(--av-border-subtle)]">
+                      <textarea
+                        rows={2}
+                        required
+                        value={commentBody}
+                        onChange={(e) => setCommentBody(e.target.value)}
+                        placeholder={
+                          isInternalNote
+                            ? 'Write an internal technician note (hidden from employees)...'
+                            : 'Write a reply to the requester...'
+                        }
+                        className={INPUT_CLASS}
+                      />
+                      <div className="flex items-center justify-between gap-3">
+                        {canInternalNotes ? (
+                          <label className="inline-flex items-center gap-2 text-xs text-[var(--av-text-muted)] cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={isInternalNote}
+                              onChange={(e) => setIsInternalNote(e.target.checked)}
+                              className="rounded border-[var(--av-border)]"
+                            />
+                            <Lock className="h-3.5 w-3.5 text-amber-500" />
+                            <span>Internal technician note</span>
+                          </label>
+                        ) : (
+                          <span />
+                        )}
+                        <button
+                          type="submit"
+                          disabled={sendingComment}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] disabled:opacity-60"
+                        >
+                          <Send className="h-3.5 w-3.5" />
+                          <span>{sendingComment ? 'Posting...' : 'Post Comment'}</span>
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </div>
               </div>
             </motion.div>

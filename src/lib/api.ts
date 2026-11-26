@@ -10,11 +10,15 @@ import type {
 } from '../types/itams.ts';
 import type {
   AssetTransfer,
+  AttachmentItem,
   AuditLogEntry,
   BillingCycle,
   ChangeRequest,
   ClientOrganisation,
+  CurrencyCode,
+  CustomFieldDef,
   DepartmentItem,
+  EmailOutboxEntry,
   Incident,
   InvoiceRecord,
   KnowledgeArticle,
@@ -25,6 +29,7 @@ import type {
   ProblemRecord,
   PurchaseOrder,
   PurchaseRequest,
+  ScheduledReportConfig,
   ServiceCatalogueItem,
   ServiceContract,
   ServiceRequest,
@@ -32,6 +37,7 @@ import type {
   SoftwareLicence,
   SubscriptionPlan,
   Tenant,
+  TenantApiKey,
   TenantContextPayload,
   TenantInvitation,
   TenantRole,
@@ -42,6 +48,8 @@ import type {
   TicketPriority,
   TicketStatus,
   Vendor,
+  WebhookDelivery,
+  WebhookEndpoint,
 } from '../types/saas.ts';
 
 const TOKEN_STORAGE_KEY = 'assetvault_session_token';
@@ -188,10 +196,77 @@ export interface ExtendedTenantContext extends TenantContextPayload {
   isSuperAdmin: boolean;
 }
 
+export type PlatformDbCollectionCategory =
+  | 'Core SaaS'
+  | 'ITAM & Custody'
+  | 'ITSM & Helpdesk'
+  | 'Procurement & Vendors'
+  | 'Governance & Logs';
+
+export interface PlatformDbCollectionMeta {
+  name: string;
+  label: string;
+  category: PlatformDbCollectionCategory;
+  tenantScoped: boolean;
+  tenantField: 'tenantId' | 'tenant_id' | 'id' | null;
+  canCreate: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  canReset: boolean;
+  count: number;
+}
+
+export interface PlatformDbSnapshot {
+  generatedAt: string;
+  plans: SubscriptionPlan[];
+  platformSettings: PlatformSettings;
+  tenants: Tenant[];
+  clientOrganisations: ClientOrganisation[];
+  locations: LocationItem[];
+  departments: DepartmentItem[];
+  memberships: Array<Record<string, unknown>>;
+  subscriptions: TenantSubscription[];
+  payments: PaymentTransaction[];
+  invoices: InvoiceRecord[];
+  users: Array<{
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+    department: string;
+    status: string;
+    is_super_admin: boolean;
+  }>;
+  assets: Asset[];
+  employees: Employee[];
+  assignments: AssetAssignment[];
+  maintenance: MaintenanceLog[];
+  assetTransfers: AssetTransfer[];
+  softwareLicences: SoftwareLicence[];
+  vendors: Vendor[];
+  purchaseRequests: PurchaseRequest[];
+  purchaseOrders: PurchaseOrder[];
+  tickets: Ticket[];
+  incidents: Incident[];
+  problems: ProblemRecord[];
+  changes: ChangeRequest[];
+  serviceCatalogue: ServiceCatalogueItem[];
+  serviceRequests: ServiceRequest[];
+  slaPolicies: SlaPolicy[];
+  contracts: ServiceContract[];
+  knowledgeArticles: KnowledgeArticle[];
+  customFields: CustomFieldDef[];
+  auditLogs: AuditLogEntry[];
+  platformAuditLogs: AuditLogEntry[];
+}
+
 export const api = {
   // Auth & Workspace Onboarding
   login: (email: string, password: string) =>
-    request<{ token: string; user: User; engine: string }>(
+    request<
+      | { token: string; user: User; engine: string; mfaRequired?: false }
+      | { mfaRequired: true; mfaChallengeToken: string; email: string }
+    >(
       '/api/auth/login',
       {
         method: 'POST',
@@ -199,6 +274,34 @@ export const api = {
       },
       { skipAuth: true }
     ),
+  verifyMfaLogin: (mfaChallengeToken: string, code: string) =>
+    request<{ token: string; user: User; engine: string }>(
+      '/api/auth/mfa/verify',
+      {
+        method: 'POST',
+        body: JSON.stringify({ mfaChallengeToken, code }),
+      },
+      { skipAuth: true }
+    ),
+  getMfaStatus: () =>
+    request<{ enabled: boolean; enrolled: boolean; recoveryCodesRemaining: number }>(
+      '/api/auth/mfa/status'
+    ),
+  setupMfa: () =>
+    request<{ secret: string; qrDataUrl: string; recoveryCodes: string[] }>(
+      '/api/auth/mfa/setup',
+      { method: 'POST' }
+    ),
+  enableMfa: (code: string) =>
+    request<{ ok: boolean; recoveryCodes: string[] }>('/api/auth/mfa/enable', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
+  disableMfa: (code: string) =>
+    request<{ ok: boolean }>('/api/auth/mfa/disable', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
   register: (payload: {
     name: string;
     email: string;
@@ -780,6 +883,34 @@ export const api = {
       settings: PlatformSettings;
       platformAuditLogs: AuditLogEntry[];
     }>('/api/platform/overview'),
+  createPlatformTenant: (payload: {
+    companyName: string;
+    tenantType: TenantType;
+    ownerEmail: string;
+    ownerName?: string;
+    ownerPassword?: string;
+    country?: string;
+    industry?: string;
+    primaryClientName?: string;
+    primaryClientCode?: string;
+    planCode: PlanCode;
+    billingCycle: BillingCycle;
+    subscriptionStatus: 'active' | 'trialing';
+    trialDays?: number;
+    deploymentMode?: Tenant['deploymentMode'];
+    customDomain?: string;
+    dedicatedProjectId?: string;
+    recordInitialPayment?: boolean;
+  }) =>
+    request<{
+      tenant: Tenant;
+      subscription: TenantSubscription;
+      owner: { id: string; name: string; email: string; isExisting: boolean };
+      invoice: InvoiceRecord | null;
+    }>('/api/platform/tenants', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   updatePlatformTenant: (
     id: string,
     payload: {
@@ -846,5 +977,275 @@ export const api = {
     request<{ ok: boolean; message: string }>('/api/platform/reset-database', {
       method: 'POST',
       body: JSON.stringify({ confirm }),
+    }),
+  getPlatformEmailOutbox: () =>
+    request<{ outbox: EmailOutboxEntry[] }>('/api/platform/email/outbox'),
+  sendPlatformTestEmail: (to: string) =>
+    request<{ ok: boolean; entry: EmailOutboxEntry }>('/api/platform/email/test', {
+      method: 'POST',
+      body: JSON.stringify({ to }),
+    }),
+
+  // Platform Super Admin Database Manager (/api/platform/database/*)
+  getPlatformDatabaseOverview: (tenantId?: string) =>
+    request<{
+      engine: string;
+      collections: PlatformDbCollectionMeta[];
+      tenants: Array<{
+        id: string;
+        name: string;
+        type: TenantType;
+        planCode: PlanCode;
+        status: Tenant['status'];
+      }>;
+    }>(
+      tenantId
+        ? `/api/platform/database/overview?tenantId=${encodeURIComponent(tenantId)}`
+        : '/api/platform/database/overview'
+    ),
+  getPlatformDatabaseRecords: (params: {
+    collection: string;
+    tenantId?: string;
+    q?: string;
+    limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    qs.set('collection', params.collection);
+    if (params.tenantId) qs.set('tenantId', params.tenantId);
+    if (params.q) qs.set('q', params.q);
+    if (params.limit) qs.set('limit', String(params.limit));
+    return request<{
+      collection: string;
+      meta: PlatformDbCollectionMeta;
+      totalCount: number;
+      records: Array<Record<string, unknown>>;
+    }>(`/api/platform/database/records?${qs.toString()}`);
+  },
+  createPlatformDatabaseRecord: (
+    collection: string,
+    record: Record<string, unknown>
+  ) =>
+    request<{ record: Record<string, unknown> }>('/api/platform/database/records', {
+      method: 'POST',
+      body: JSON.stringify({ collection, record }),
+    }),
+  updatePlatformDatabaseRecord: (
+    collection: string,
+    id: string,
+    record: Record<string, unknown>
+  ) =>
+    request<{ record: Record<string, unknown> }>(
+      `/api/platform/database/records/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ record }),
+      }
+    ),
+  deletePlatformDatabaseRecord: (collection: string, id: string) =>
+    request<{ ok: boolean }>(
+      `/api/platform/database/records/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`,
+      {
+        method: 'DELETE',
+      }
+    ),
+  runPlatformTenantDatabaseOp: (payload: {
+    tenantId: string;
+    action:
+      | 'delete_collection_data'
+      | 'reset_tenant_workspace'
+      | 'delete_tenant_completely';
+    collection?: string;
+  }) =>
+    request<{ ok: boolean; removedCount: number; message: string }>(
+      '/api/platform/database/tenant-operations',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    ),
+  resetPlatformIndividualCollection: (payload: {
+    collection: string;
+    tenantId?: string;
+    confirm: string;
+  }) =>
+    request<{ ok: boolean; removedCount: number; message: string }>(
+      '/api/platform/database/reset-collection',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    ),
+  getPlatformDatabaseSnapshot: (tenantId?: string) =>
+    request<PlatformDbSnapshot>(
+      tenantId
+        ? `/api/platform/database/snapshot?tenantId=${encodeURIComponent(tenantId)}`
+        : '/api/platform/database/snapshot'
+    ),
+  recordPlatformAuditLog: (payload: {
+    action: string;
+    entityType: string;
+    entityId: string;
+    tenantId?: string;
+    summary: string;
+  }) =>
+    request<{ auditLog: AuditLogEntry }>('/api/platform/audit-logs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  // Workspace Settings & Currency
+  updateWorkspaceSettings: (payload: {
+    name?: string;
+    country?: string;
+    supportEmail?: string;
+    currency?: CurrencyCode;
+  }) =>
+    request<{ tenant: Tenant }>('/api/workspace/settings', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  // Document & Image Attachments
+  getAttachments: (
+    entityType: AttachmentItem['entityType'],
+    entityId: string
+  ) =>
+    request<{ attachments: AttachmentItem[] }>(
+      `/api/attachments?entityType=${encodeURIComponent(entityType)}&entityId=${encodeURIComponent(entityId)}`
+    ),
+  uploadAttachment: (payload: {
+    entityType: AttachmentItem['entityType'];
+    entityId: string;
+    orgId?: string;
+    fileName: string;
+    mimeType: string;
+    dataUrl: string;
+  }) =>
+    request<{ attachment: AttachmentItem }>('/api/attachments', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  deleteAttachment: (id: string) =>
+    request<{ ok: boolean }>(`/api/attachments/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  // Custom Fields Builder & Values
+  getCustomFields: (entityType?: CustomFieldDef['entityType']) =>
+    request<{ fields: CustomFieldDef[] }>(
+      entityType
+        ? `/api/custom-fields?entityType=${encodeURIComponent(entityType)}`
+        : '/api/custom-fields'
+    ),
+  createCustomField: (payload: {
+    entityType: CustomFieldDef['entityType'];
+    label: string;
+    fieldType: CustomFieldDef['fieldType'];
+    options?: string[];
+    required?: boolean;
+  }) =>
+    request<{ field: CustomFieldDef }>('/api/custom-fields', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  deleteCustomField: (id: string) =>
+    request<{ ok: boolean }>(`/api/custom-fields/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  getCustomFieldValues: (
+    entityType: CustomFieldDef['entityType'],
+    entityId: string
+  ) =>
+    request<{ values: Record<string, string> }>(
+      `/api/custom-fields/values/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}`
+    ),
+  saveCustomFieldValues: (
+    entityType: CustomFieldDef['entityType'],
+    entityId: string,
+    values: Record<string, string>
+  ) =>
+    request<{ values: Record<string, string> }>(
+      `/api/custom-fields/values/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ values }),
+      }
+    ),
+
+  // API Keys & Outbound Webhooks
+  getApiKeys: () => request<{ apiKeys: TenantApiKey[] }>('/api/integrations/api-keys'),
+  createApiKey: (name: string, scopes: string[]) =>
+    request<{ apiKey: TenantApiKey; plaintextKey: string }>(
+      '/api/integrations/api-keys',
+      {
+        method: 'POST',
+        body: JSON.stringify({ name, scopes }),
+      }
+    ),
+  revokeApiKey: (id: string) =>
+    request<{ ok: boolean }>(
+      `/api/integrations/api-keys/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    ),
+  getWebhooks: () =>
+    request<{ webhooks: WebhookEndpoint[]; deliveries: WebhookDelivery[] }>(
+      '/api/integrations/webhooks'
+    ),
+  createWebhook: (payload: { name: string; url: string; events: string[] }) =>
+    request<{ webhook: WebhookEndpoint; signingSecret: string }>(
+      '/api/integrations/webhooks',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    ),
+  testWebhook: (id: string) =>
+    request<{ delivery: WebhookDelivery | null }>(
+      `/api/integrations/webhooks/${encodeURIComponent(id)}/test`,
+      { method: 'POST' }
+    ),
+  deleteWebhook: (id: string) =>
+    request<{ ok: boolean }>(
+      `/api/integrations/webhooks/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    ),
+
+  // Scheduled Reports & Email Outbox
+  getScheduledReports: () =>
+    request<{ schedules: ScheduledReportConfig[]; outbox: EmailOutboxEntry[] }>(
+      '/api/automation/schedules'
+    ),
+  createScheduledReport: (payload: {
+    name: string;
+    reportType: ScheduledReportConfig['reportType'];
+    frequency: ScheduledReportConfig['frequency'];
+    recipients: string[];
+  }) =>
+    request<{ schedule: ScheduledReportConfig }>('/api/automation/schedules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  runScheduledReport: (id: string) =>
+    request<{
+      ok: boolean;
+      schedule: ScheduledReportConfig;
+      digest: { subject: string; text: string };
+    }>(`/api/automation/schedules/${encodeURIComponent(id)}/run`, {
+      method: 'POST',
+    }),
+  deleteScheduledReport: (id: string) =>
+    request<{ ok: boolean }>(
+      `/api/automation/schedules/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    ),
+  runComplianceSweep: (forceReports = false) =>
+    request<{
+      ok: boolean;
+      escalatedCount: number;
+      alertsRecorded: number;
+      reportsDispatched: number;
+    }>('/api/jobs/run', {
+      method: 'POST',
+      body: JSON.stringify({ forceReports }),
     }),
 };

@@ -15,9 +15,15 @@ import {
   verifyPaystackTransaction,
   verifyPaystackWebhookSignature,
 } from './paystack.ts';
+import { hashPassword } from './auth.ts';
+import { sendTransactionalEmail } from './mailer.ts';
 import { canViewInternalTicketNotes } from './rbac.ts';
+import { registerIntegrationRoutes } from './routesIntegrations.ts';
+import { registerPlatformDatabaseRoutes } from './platformDatabaseRoutes.ts';
 import { DEFAULT_TENANT_ID, type SaasStore } from './saasStore.ts';
+import { runScheduledComplianceSweep } from './scheduler.ts';
 import { calculateTicketSlaTargets, evaluateTicketBreach } from './sla.ts';
+import { dispatchWebhookEvent } from './webhooks.ts';
 import type { Asset, AssetCategory } from '../src/types/itams.ts';
 import type {
   BillingCycle,
@@ -37,10 +43,15 @@ import type {
   ServiceRequest,
   SlaPolicy,
   SoftwareLicence,
+  Tenant,
+  TenantRole,
+  TenantSubscription,
+  TenantType,
   Ticket,
   TicketComment,
   TicketPriority,
   TicketStatus,
+  UserMembership,
   Vendor,
 } from '../src/types/saas.ts';
 
@@ -705,6 +716,13 @@ export function registerSaasRoutes(params: {
         entityType: 'ticket',
         entityId: ticket.id,
         summary: `Opened ticket ${ticket.ticketNumber}: ${ticket.subject}`,
+      });
+      void dispatchWebhookEvent(store, ctx.tenant.id, 'ticket.created', {
+        id: ticket.id,
+        ticketNumber: ticket.ticketNumber,
+        subject: ticket.subject,
+        priority: ticket.priority,
+        requesterEmail: ticket.requesterEmail,
       });
       res.status(201).json({ ticket });
     }
@@ -1515,6 +1533,12 @@ export function registerSaasRoutes(params: {
         entityId: po.id,
         summary: `Received ${po.quantity} assets from ${po.poNumber}`,
       });
+      void dispatchWebhookEvent(store, ctx.tenant.id, 'po.received', {
+        poId: po.id,
+        poNumber: po.poNumber,
+        vendorName: po.vendorName,
+        receivedCount: createdAssets.length,
+      });
       res.json({ purchaseOrder: po, createdAssets });
     }
   );
@@ -1600,47 +1624,10 @@ export function registerSaasRoutes(params: {
       if (res.headersSent) return;
     }
 
-    const nowMs = Date.now();
-    const todayKey = new Date().toISOString().slice(0, 10);
-    let escalatedCount = 0;
-    let alertsRecorded = 0;
-
-    for (const ticket of store.data.tickets) {
-      const check = evaluateTicketBreach(ticket, nowMs);
-      if (check.breached && !ticket.slaBreached) {
-        ticket.slaBreached = true;
-      }
-      if (check.needsEscalation) {
-        ticket.escalationLevel += 1;
-        ticket.status = 'Escalated';
-        escalatedCount += 1;
-        const jobKey = `sla-esc:${ticket.id}:${ticket.escalationLevel}:${todayKey}`;
-        if (!store.data.alertJobHistory.some((h) => h.key === jobKey)) {
-          store.data.alertJobHistory.push({
-            key: jobKey,
-            triggeredAt: new Date().toISOString(),
-          });
-          alertsRecorded += 1;
-        }
-      }
-    }
-
-    // Expire past-due licences & contracts cleanly
-    for (const lic of store.data.softwareLicences) {
-      const diff = Math.ceil(
-        (new Date(lic.expiryDate).getTime() - nowMs) / 86400_000
-      );
-      lic.status = diff < 0 ? 'Expired' : diff <= 30 ? 'Expiring Soon' : 'Active';
-    }
-    for (const ctr of store.data.contracts) {
-      const diff = Math.ceil(
-        (new Date(ctr.endDate).getTime() - nowMs) / 86400_000
-      );
-      ctr.status = diff < 0 ? 'Expired' : diff <= 30 ? 'Expiring Soon' : 'Active';
-    }
-
-    await store.persist();
-    res.json({ ok: true, escalatedCount, alertsRecorded });
+    const result = await runScheduledComplianceSweep(store, db, {
+      forceReports: Boolean(req.body?.forceReports),
+    });
+    res.json({ ok: true, ...result });
   });
 
   // -------------------------------------------------------------------------
@@ -1848,6 +1835,257 @@ export function registerSaasRoutes(params: {
     }
   );
 
+  app.post(
+    '/api/platform/tenants',
+    requireAuth,
+    requirePlatformSuperAdmin,
+    async (req, res) => {
+      try {
+        const body = req.body ?? {};
+        const companyName = String(body.companyName ?? '').trim();
+        const tenantType: TenantType = body.tenantType === 'msp' ? 'msp' : 'company';
+        const ownerEmail = String(body.ownerEmail ?? '').trim().toLowerCase();
+        const ownerName = String(body.ownerName ?? '').trim();
+        const ownerPassword = String(body.ownerPassword ?? '');
+        const country = String(body.country ?? 'Ghana').trim() || 'Ghana';
+        const industry = String(body.industry ?? 'Enterprise IT').trim() || 'Enterprise IT';
+
+        const validPlans: PlanCode[] = [
+          'starter',
+          'professional',
+          'business',
+          'enterprise',
+        ];
+        const requestedPlan = String(body.planCode ?? 'professional') as PlanCode;
+        const planCode: PlanCode = validPlans.includes(requestedPlan)
+          ? requestedPlan
+          : 'professional';
+
+        const billingCycle: BillingCycle =
+          body.billingCycle === 'annual' ? 'annual' : 'monthly';
+        const subscriptionStatus: TenantSubscription['status'] =
+          body.subscriptionStatus === 'trialing' ? 'trialing' : 'active';
+        const deploymentMode: Tenant['deploymentMode'] =
+          body.deploymentMode === 'dedicated_enterprise'
+            ? 'dedicated_enterprise'
+            : 'shared_cloud';
+
+        if (!companyName) {
+          res.status(400).json({ error: 'Workspace / organisation name is required.' });
+          return;
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) {
+          res.status(400).json({ error: 'A valid workspace owner email is required.' });
+          return;
+        }
+
+        const existingOwner = await db.findUserByEmail(ownerEmail);
+        if (!existingOwner) {
+          if (!ownerName) {
+            res.status(400).json({
+              error: 'Owner full name is required for a new user account.',
+            });
+            return;
+          }
+          if (ownerPassword.length < 8) {
+            res.status(400).json({
+              error: 'Initial password (minimum 8 characters) is required for a new owner account.',
+            });
+            return;
+          }
+        }
+
+        const now = new Date().toISOString();
+        const ownerUser = existingOwner
+          ? existingOwner
+          : await db.createUser({
+              id: `usr-${crypto.randomUUID().slice(0, 8)}`,
+              name: ownerName,
+              email: ownerEmail,
+              password_hash: hashPassword(ownerPassword),
+              role: 'admin',
+              department: 'IT Infrastructure',
+              status: 'active',
+              created_at: now,
+              last_login: null,
+              email_verified: true,
+              mfa_enabled: false,
+              is_super_admin: false,
+            });
+
+        const tenantId = `ten-${crypto.randomUUID().slice(0, 8)}`;
+        const slugBase = companyName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '')
+          .slice(0, 32);
+
+        const tenant: Tenant = {
+          id: tenantId,
+          name: companyName,
+          slug: `${slugBase || 'workspace'}-${tenantId.slice(-4)}`,
+          type: tenantType,
+          status: subscriptionStatus === 'trialing' ? 'trial' : 'active',
+          ownerUserId: ownerUser.id,
+          planCode,
+          deploymentMode,
+          ...(deploymentMode === 'dedicated_enterprise'
+            ? {
+                dedicatedConfig: {
+                  customDomain: String(body.customDomain ?? '').trim() || undefined,
+                  dedicatedProjectId: String(body.dedicatedProjectId ?? '').trim() || undefined,
+                  isolationTier: 'dedicated_cluster' as const,
+                },
+              }
+            : {}),
+          supportEmail: ownerEmail,
+          country,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        const primaryClientName =
+          String(body.primaryClientName ?? '').trim() ||
+          (tenantType === 'msp' ? `${companyName} (Primary Client)` : companyName);
+        const primaryClientCode =
+          String(body.primaryClientCode ?? 'HQ-01')
+            .trim()
+            .toUpperCase() || 'HQ-01';
+
+        const defaultOrg: ClientOrganisation = {
+          id: `org-${crypto.randomUUID().slice(0, 8)}`,
+          tenantId,
+          name: primaryClientName,
+          code: primaryClientCode,
+          industry,
+          contactName: ownerUser.name,
+          contactEmail: ownerEmail,
+          contactPhone: '',
+          address: '',
+          status: 'active',
+          isDefault: true,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        const ownerRole: TenantRole =
+          tenantType === 'msp' ? 'msp_admin' : 'tenant_owner';
+        const ownerMembership: UserMembership = {
+          id: `${ownerUser.id}_${tenantId}`,
+          userId: ownerUser.id,
+          tenantId,
+          role: ownerRole,
+          status: 'active',
+          orgAccessMode: 'all',
+          allowedOrgIds: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        const plan =
+          store.data.plans.find((p) => p.code === planCode) || store.data.plans[0];
+        const planPrice =
+          billingCycle === 'annual' ? plan.annualPriceGhs : plan.monthlyPriceGhs;
+        const defaultTrialDays = store.data.platformSettings.trialDays || 14;
+        const trialDays = Math.max(
+          1,
+          Number(body.trialDays ?? defaultTrialDays) || defaultTrialDays
+        );
+        const periodDays =
+          subscriptionStatus === 'trialing'
+            ? trialDays
+            : billingCycle === 'annual'
+              ? 365
+              : 30;
+        const periodEnd = new Date(
+          Date.now() + periodDays * 24 * 60 * 60 * 1000
+        ).toISOString();
+
+        const subscription: TenantSubscription = {
+          id: `sub-${crypto.randomUUID().slice(0, 8)}`,
+          tenantId,
+          planCode,
+          billingCycle,
+          status: subscriptionStatus,
+          trialEndsAt: subscriptionStatus === 'trialing' ? periodEnd : null,
+          currentPeriodStart: now,
+          currentPeriodEnd: periodEnd,
+          graceEndsAt: null,
+          cancelAtPeriodEnd: false,
+          amountGhs: planPrice,
+          updatedAt: now,
+        };
+
+        await store.mutate(() => {
+          store.seedTenantDefaults({
+            tenant,
+            defaultOrg,
+            ownerMembership,
+            subscription,
+          });
+        });
+
+        let paymentResult: Awaited<ReturnType<typeof finalizePaymentSuccess>> | null =
+          null;
+        if (
+          subscriptionStatus === 'active' &&
+          Boolean(body.recordInitialPayment) &&
+          planPrice > 0
+        ) {
+          const ref = `AV-ADM-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+          const payment: PaymentTransaction = {
+            id: `pay-${crypto.randomUUID().slice(0, 8)}`,
+            tenantId,
+            subscriptionId: subscription.id,
+            reference: ref,
+            provider: 'manual',
+            planCode,
+            billingCycle,
+            amountGhs: planPrice,
+            currency: 'GHS',
+            status: 'pending',
+            paidAt: null,
+            createdBy: (req as TenantRequest).authUser!.id,
+            createdAt: now,
+          };
+          store.data.payments.unshift(payment);
+          paymentResult = await finalizePaymentSuccess(store, ref, {
+            channel: 'super_admin_provision',
+            verifiedAmountGhs: planPrice,
+          });
+        }
+
+        await store.appendAuditLog({
+          tenantId: tenant.id,
+          orgId: 'platform',
+          actorUserId: (req as TenantRequest).authUser!.id,
+          actorEmail: (req as TenantRequest).authUser!.email,
+          actorRole: 'super_admin',
+          action: 'PLATFORM_TENANT_CREATED',
+          entityType: 'tenant',
+          entityId: tenant.id,
+          summary: `Super Admin registered ${tenant.type.toUpperCase()} tenant "${tenant.name}" (${plan.name}, ${subscriptionStatus}/${billingCycle}) for ${ownerEmail}`,
+          isPlatform: true,
+        });
+
+        res.status(201).json({
+          tenant,
+          subscription: paymentResult?.subscription || subscription,
+          owner: {
+            id: ownerUser.id,
+            name: ownerUser.name,
+            email: ownerUser.email,
+            isExisting: Boolean(existingOwner),
+          },
+          invoice: paymentResult?.invoice || null,
+        });
+      } catch (err) {
+        console.error('Create platform tenant error:', err);
+        res.status(500).json({ error: 'Failed to register tenant workspace.' });
+      }
+    }
+  );
+
   app.put(
     '/api/platform/tenants/:id',
     requireAuth,
@@ -2038,7 +2276,11 @@ export function registerSaasRoutes(params: {
         return;
       }
       if (req.body?.name) plan.name = String(req.body.name).trim();
-      if (req.body?.tagline) plan.tagline = String(req.body.tagline).trim();
+      if (req.body?.tagline !== undefined) plan.tagline = String(req.body.tagline).trim();
+      if (req.body?.isPublic !== undefined) plan.isPublic = Boolean(req.body.isPublic);
+      if (req.body?.isCustomAnnual !== undefined) {
+        plan.isCustomAnnual = Boolean(req.body.isCustomAnnual);
+      }
       if (req.body?.monthlyPriceGhs !== undefined) {
         plan.monthlyPriceGhs = Math.max(0, Number(req.body.monthlyPriceGhs));
       }
@@ -2204,6 +2446,53 @@ export function registerSaasRoutes(params: {
       }
     }
   );
+
+  app.get(
+    '/api/platform/email/outbox',
+    requireAuth,
+    requirePlatformSuperAdmin,
+    (_req, res) => {
+      res.json({ outbox: store.data.emailOutbox.slice(0, 60) });
+    }
+  );
+
+  app.post(
+    '/api/platform/email/test',
+    requireAuth,
+    requirePlatformSuperAdmin,
+    async (req, res) => {
+      const to = String(req.body?.to ?? '').trim().toLowerCase();
+      if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+        res.status(400).json({ error: 'Valid recipient email is required.' });
+        return;
+      }
+      const entry = await sendTransactionalEmail(store, {
+        tenantId: 'platform',
+        to,
+        subject: `${store.data.platformSettings.platformName} — SMTP Delivery Verification`,
+        text: `This is a verification email from ${store.data.platformSettings.platformName}. Delivery mode: ${
+          store.data.platformSettings.smtpConfigured ? 'SMTP Live' : 'Local Console Outbox'
+        }.`,
+      });
+      res.json({ ok: true, entry });
+    }
+  );
+
+  registerIntegrationRoutes({
+    app,
+    db,
+    store,
+    requireAuth,
+    resolveTenantContext,
+  });
+
+  registerPlatformDatabaseRoutes({
+    app,
+    db,
+    store,
+    requireAuth,
+    requirePlatformSuperAdmin,
+  });
 }
 
 async function finalizePaymentSuccess(

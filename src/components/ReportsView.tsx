@@ -12,12 +12,14 @@ import {
   type MaintenanceLog,
 } from '../types/itams.ts';
 import type { PurchaseOrder, SoftwareLicence, Ticket } from '../types/saas.ts';
+import { computeAssetBookValue } from './AssetLabelsAndModals.tsx';
 import { formatCurrencyExact, formatGhsExact } from './StatusText.tsx';
 import { DataPagination } from './ui/DataPagination.tsx';
 import { EmptyState } from './ui/EmptyState.tsx';
 
 type ReportType =
   | 'inventory'
+  | 'depreciation'
   | 'assigned'
   | 'maintenance'
   | 'warranty'
@@ -103,6 +105,74 @@ export function ReportsView({
         summaryLines: [
           `Total Units: ${filtered.length}`,
           `Total Portfolio Value: ${formatCurrencyExact(totalVal)}`,
+        ],
+      };
+    }
+
+    if (reportType === 'depreciation') {
+      const filtered = assets.filter((a) => {
+        if (categoryFilter !== 'ALL' && a.category !== categoryFilter) return false;
+        if (statusFilter !== 'ALL' && a.status !== statusFilter) return false;
+        return true;
+      });
+      let totalAcquisition = 0;
+      let totalBookValue = 0;
+      const rows = filtered.map((a) => {
+        const cost = Number(a.cost || 0);
+        const salvage = Number(a.salvage_value ?? 0);
+        const bookVal = computeAssetBookValue(a);
+        const accumDep = Math.max(0, cost - bookVal);
+        const depPct = cost > 0 ? Math.min(100, (accumDep / cost) * 100) : 0;
+        const ageYears = a.purchase_date
+          ? Math.max(
+              0,
+              (todayMs - new Date(`${a.purchase_date}T00:00:00`).getTime()) /
+                (dayMs * 365.25)
+            )
+          : 0;
+        totalAcquisition += cost;
+        totalBookValue += bookVal;
+        return [
+          a.asset_tag,
+          a.name,
+          a.category,
+          a.purchase_date || '—',
+          `${ageYears.toFixed(1)} yrs`,
+          (a.depreciation_method || 'straight_line').replace('_', ' '),
+          `${a.useful_life_years ?? 4} yrs`,
+          formatCurrencyExact(cost),
+          formatCurrencyExact(salvage),
+          formatCurrencyExact(accumDep),
+          `${depPct.toFixed(1)}%`,
+          formatCurrencyExact(bookVal),
+        ];
+      });
+      const totalAccum = Math.max(0, totalAcquisition - totalBookValue);
+      return {
+        title: 'Fixed Asset Depreciation Schedule',
+        subtitle: `Category: ${categoryFilter} · Status: ${statusFilter}`,
+        sheetName: 'Depreciation Schedule',
+        filename: `AssetVault_Depreciation_Schedule_${new Date().toISOString().slice(0, 10)}`,
+        columns: [
+          'Asset Tag',
+          'Asset Name',
+          'Category',
+          'Acquired',
+          'Age',
+          'Method',
+          'Useful Life',
+          'Original Cost',
+          'Salvage Value',
+          'Accum. Depreciation',
+          'Dep. %',
+          'Net Book Value',
+        ],
+        rows,
+        summaryLines: [
+          `Assets Scheduled: ${filtered.length}`,
+          `Original Cost: ${formatCurrencyExact(totalAcquisition)}`,
+          `Accumulated Depreciation: ${formatCurrencyExact(totalAccum)}`,
+          `Current Net Book Value: ${formatCurrencyExact(totalBookValue)}`,
         ],
       };
     }
@@ -410,6 +480,7 @@ export function ReportsView({
             {(
               [
                 ['inventory', 'Asset Inventory'],
+                ['depreciation', 'Depreciation Schedule'],
                 ['assigned', 'Assigned Assets'],
                 ['maintenance', 'Maintenance & Costs'],
                 ['warranty', 'Warranty & Replacement'],

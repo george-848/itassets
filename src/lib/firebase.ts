@@ -76,13 +76,14 @@ export function handleFirestoreError(
 
 let connectionTested = false;
 
-export async function testConnection(): Promise<boolean> {
-  if (connectionTested) return true;
-  connectionTested = true;
+export async function testConnection(force = false): Promise<boolean> {
+  if (connectionTested && !force) return true;
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
+    connectionTested = true;
     return true;
   } catch (error) {
+    connectionTested = false;
     if (
       error instanceof Error &&
       error.message.includes('the client is offline')

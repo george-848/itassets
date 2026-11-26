@@ -80,26 +80,33 @@ service cloud.firestore {
     // -------------------------------------------------------------------------
     function isValidPlatformPlan(data) {
       return data.keys().hasAll(['id', 'code', 'name', 'monthlyPriceGhs', 'annualPriceGhs', 'createdBy', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'code', 'name', 'description', 'monthlyPriceGhs', 'annualPriceGhs', 'isPublic', 'limits', 'features', 'createdBy', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'code', 'name', 'description', 'tagline', 'monthlyPriceGhs', 'annualPriceGhs', 'isPublic', 'isCustomAnnual', 'limits', 'features', 'createdBy', 'createdAt', 'updatedAt']) &&
         isValidId(data.id) &&
         data.code in ['starter', 'professional', 'business', 'enterprise'] &&
         isValidShortText(data.name, 2, 80) &&
+        (!('tagline' in data) || isValidShortText(data.tagline, 0, 240)) &&
+        (!('isCustomAnnual' in data) || data.isCustomAnnual is bool) &&
         data.monthlyPriceGhs is number && data.monthlyPriceGhs >= 0 &&
         data.annualPriceGhs is number && data.annualPriceGhs >= 0 &&
-        data.createdBy == request.auth.uid &&
+        isValidId(data.createdBy) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
 
     function isValidTenantProfile(data) {
       return data.keys().hasAll(['id', 'name', 'type', 'status', 'ownerUid', 'planCode', 'createdAt', 'updatedAt']) &&
-        data.keys().hasOnly(['id', 'name', 'slug', 'type', 'status', 'ownerUid', 'planCode', 'deploymentMode', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'name', 'slug', 'type', 'status', 'ownerUid', 'planCode', 'deploymentMode', 'supportEmail', 'country', 'currency', 'createdAt', 'updatedAt']) &&
         isValidId(data.id) &&
         isValidShortText(data.name, 2, 160) &&
+        (!('slug' in data) || isValidShortText(data.slug, 2, 160)) &&
         data.type in ['company', 'msp'] &&
-        data.status in ['active', 'suspended', 'trial'] &&
+        data.status in ['active', 'suspended', 'trial', 'grace'] &&
         isValidId(data.ownerUid) &&
         data.planCode in ['starter', 'professional', 'business', 'enterprise'] &&
+        (!('deploymentMode' in data) || data.deploymentMode in ['shared', 'shared_cloud', 'dedicated_enterprise']) &&
+        (!('supportEmail' in data) || isValidShortText(data.supportEmail, 0, 180)) &&
+        (!('country' in data) || isValidShortText(data.country, 0, 80)) &&
+        (!('currency' in data) || isValidShortText(data.currency, 1, 12)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }
@@ -194,8 +201,8 @@ service cloud.firestore {
     match /plans/{planId} {
       allow get: if isSignedIn() && isValidId(planId);
       allow list: if isSignedIn() && (existing().isPublic == true || isBootstrappedSuperAdmin());
-      allow create: if isSuperAdmin() && isValidId(planId) && isValidPlatformPlan(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isSuperAdmin() && isValidId(planId) && isValidPlatformPlan(incoming()) && incoming().createdBy == existing().createdBy && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'monthlyPriceGhs', 'annualPriceGhs', 'isPublic', 'limits', 'features', 'updatedAt']);
+      allow create: if isSuperAdmin() && isValidId(planId) && isValidPlatformPlan(incoming()) && incoming().createdBy == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isSuperAdmin() && isValidId(planId) && isValidPlatformPlan(incoming()) && incoming().createdBy == existing().createdBy && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'tagline', 'monthlyPriceGhs', 'annualPriceGhs', 'isPublic', 'isCustomAnnual', 'limits', 'features', 'updatedAt']);
       allow delete: if isSuperAdmin() && isValidId(planId);
     }
 
@@ -206,10 +213,12 @@ service cloud.firestore {
 
     match /platform/{docId} {
       allow get, create, update, delete: if isSuperAdmin() && isValidId(docId);
+      allow list: if isBootstrappedSuperAdmin();
     }
 
     match /platformSettings/{settingId} {
       allow get, create, update, delete: if isSuperAdmin() && isValidId(settingId);
+      allow list: if isBootstrappedSuperAdmin();
     }
 
     match /provisioningJobs/{jobId} {
@@ -227,21 +236,21 @@ service cloud.firestore {
     match /tenantRegistry/{tenantId} {
       allow get: if isValidId(tenantId) && (isSuperAdmin() || hasActiveMembership(tenantId));
       allow list: if isVerifiedUser() && (isBootstrappedSuperAdmin() || existing().ownerUid == request.auth.uid);
-      allow create: if isVerifiedUser() && isValidId(tenantId) && isValidTenantProfile(incoming()) && incoming().ownerUid == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if (isSuperAdmin() || isTenantAdmin(tenantId)) && isValidId(tenantId) && isValidTenantProfile(incoming()) && incoming().id == existing().id && incoming().ownerUid == existing().ownerUid && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'slug', 'status', 'planCode', 'deploymentMode', 'updatedAt']);
+      allow create: if isVerifiedUser() && isValidId(tenantId) && isValidTenantProfile(incoming()) && (isSuperAdmin() || incoming().ownerUid == request.auth.uid) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if (isSuperAdmin() || isTenantAdmin(tenantId)) && isValidId(tenantId) && isValidTenantProfile(incoming()) && incoming().id == existing().id && incoming().ownerUid == existing().ownerUid && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'slug', 'status', 'planCode', 'deploymentMode', 'supportEmail', 'country', 'currency', 'updatedAt']);
       allow delete: if isSuperAdmin() && isValidId(tenantId);
     }
 
     match /tenants/{tenantId} {
       allow get: if isValidId(tenantId) && (isSuperAdmin() || hasActiveMembership(tenantId));
       allow list: if isVerifiedUser() && (isBootstrappedSuperAdmin() || existing().ownerUid == request.auth.uid);
-      allow create: if isVerifiedUser() && isValidId(tenantId) && isValidTenantProfile(incoming()) && incoming().ownerUid == request.auth.uid && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if (isSuperAdmin() || isTenantAdmin(tenantId)) && isValidId(tenantId) && isValidTenantProfile(incoming()) && incoming().id == existing().id && incoming().ownerUid == existing().ownerUid && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'slug', 'status', 'planCode', 'deploymentMode', 'updatedAt']);
+      allow create: if isVerifiedUser() && isValidId(tenantId) && isValidTenantProfile(incoming()) && (isSuperAdmin() || incoming().ownerUid == request.auth.uid) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if (isSuperAdmin() || isTenantAdmin(tenantId)) && isValidId(tenantId) && isValidTenantProfile(incoming()) && incoming().id == existing().id && incoming().ownerUid == existing().ownerUid && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'slug', 'status', 'planCode', 'deploymentMode', 'supportEmail', 'country', 'currency', 'updatedAt']);
       allow delete: if isSuperAdmin() && isValidId(tenantId);
 
       match /config/{docId} {
         allow get: if isValidId(tenantId) && isValidId(docId) && (isSuperAdmin() || hasActiveMembership(tenantId));
-        allow create, update: if isValidId(tenantId) && isValidId(docId) && (isSuperAdmin() || isTenantAdmin(tenantId));
+        allow create, update, delete: if isValidId(tenantId) && isValidId(docId) && (isSuperAdmin() || isTenantAdmin(tenantId));
       }
     }
 
@@ -270,7 +279,8 @@ service cloud.firestore {
 
     match /usage/{tenantId} {
       allow get: if isValidId(tenantId) && (isSuperAdmin() || hasActiveMembership(tenantId));
-      allow create, update: if isSuperAdmin() && isValidId(tenantId);
+      allow list: if isBootstrappedSuperAdmin();
+      allow create, update, delete: if isSuperAdmin() && isValidId(tenantId);
     }
 
     // -------------------------------------------------------------------------
@@ -278,7 +288,8 @@ service cloud.firestore {
     // -------------------------------------------------------------------------
     match /users/{uid} {
       allow get: if isVerifiedUser() && isValidId(uid) && (request.auth.uid == uid || isSuperAdmin());
-      allow create: if isVerifiedUser() && isValidId(uid) && request.auth.uid == uid && isValidUserPublic(incoming(), uid) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow list: if isBootstrappedSuperAdmin();
+      allow create: if isVerifiedUser() && isValidId(uid) && (request.auth.uid == uid || isSuperAdmin()) && isValidUserPublic(incoming(), uid) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
       allow update: if isVerifiedUser() && isValidId(uid) && (request.auth.uid == uid || isSuperAdmin()) && isValidUserPublic(incoming(), uid) && incoming().uid == existing().uid && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'department', 'updatedAt']);
       allow delete: if isSuperAdmin() && isValidId(uid);
 
@@ -362,7 +373,7 @@ service cloud.firestore {
         incoming().updatedBy == request.auth.uid &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
-        canAccessTenantOrg(incoming().tenantId, incoming().orgId) &&
+        (isSuperAdmin() || canAccessTenantOrg(incoming().tenantId, incoming().orgId)) &&
         exists(/databases/$(database)/documents/tenants/$(incoming().tenantId));
     }
 
@@ -420,6 +431,13 @@ service cloud.firestore {
       allow create: if isValidId(docId) && isValidMembership(incoming()) && (isSuperAdmin() || isTenantAdmin(incoming().tenantId));
       allow update: if isValidId(docId) && isValidMembership(incoming()) && (isSuperAdmin() || isTenantAdmin(existing().tenantId));
       allow delete: if isValidId(docId) && (isSuperAdmin() || isTenantAdmin(existing().tenantId));
+    }
+    match /employees/{docId} {
+      allow get: if allowTenantScopedGet(docId);
+      allow list: if allowTenantScopedList();
+      allow create: if allowTenantScopedCreate(docId);
+      allow update: if allowTenantScopedUpdate(docId);
+      allow delete: if allowTenantScopedDelete(docId);
     }
     match /assets/{docId} {
       allow get: if allowTenantScopedGet(docId);

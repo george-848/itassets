@@ -6,23 +6,15 @@ import {
   UserCheck,
   Wrench,
 } from 'lucide-react';
+import { formatWorkspaceMoney } from '../lib/currency.ts';
 import type { AssetStatus, MaintenanceStatus } from '../types/itams.ts';
 
 export function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 0,
-  }).format(amount || 0);
+  return formatWorkspaceMoney(amount, { exact: false });
 }
 
 export function formatCurrencyExact(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount || 0);
+  return formatWorkspaceMoney(amount, { exact: true });
 }
 
 export function formatGhs(amount: number): string {

@@ -50,6 +50,13 @@ export function LoginView({ onSuccess }: LoginViewProps) {
   const [resetMessage, setResetMessage] = useState<string | null>(null);
   const [resetLoading, setResetLoading] = useState(false);
 
+  // 2FA challenge state
+  const [mfaChallenge, setMfaChallenge] = useState<{
+    token: string;
+    email: string;
+  } | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
+
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [githubLoading, setGithubLoading] = useState(false);
@@ -107,7 +114,14 @@ export function LoginView({ onSuccess }: LoginViewProps) {
       setLoading(true);
       try {
         const res = await api.login(trimmedEmail, password);
-        onSuccess(res.token, res.user);
+        if ('mfaRequired' in res && res.mfaRequired) {
+          setMfaChallenge({ token: res.mfaChallengeToken, email: res.email });
+          setMfaCode('');
+          return;
+        }
+        if ('token' in res && res.token && res.user) {
+          onSuccess(res.token, res.user);
+        }
       } catch (err) {
         if (err instanceof ApiError) {
           setError(err.message);
@@ -143,6 +157,23 @@ export function LoginView({ onSuccess }: LoginViewProps) {
         err instanceof ApiError
           ? err.message
           : 'Unable to create workspace right now.'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMfaVerify = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!mfaChallenge || !mfaCode.trim()) return;
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await api.verifyMfaLogin(mfaChallenge.token, mfaCode.trim());
+      onSuccess(res.token, res.user);
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : '2FA verification failed.'
       );
     } finally {
       setLoading(false);
@@ -410,6 +441,54 @@ export function LoginView({ onSuccess }: LoginViewProps) {
             </motion.div>
           )}
 
+          {mfaChallenge ? (
+            <form onSubmit={handleMfaVerify} className="mt-5 space-y-4">
+              <div className="rounded-lg border border-[var(--av-border-subtle)] bg-[var(--av-surface-muted)]/50 p-3.5 space-y-1">
+                <div className="flex items-center gap-2 text-xs font-semibold text-[var(--av-text)]">
+                  <ShieldCheck className="h-4 w-4 text-[var(--av-accent)]" />
+                  <span>Two-Factor Verification Required</span>
+                </div>
+                <p className="text-[11px] text-[var(--av-text-subtle)]">
+                  Enter the 6-digit code from your authenticator app (or an unused recovery code) for{' '}
+                  <strong>{mfaChallenge.email}</strong>.
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1">
+                  Authenticator / Recovery Code
+                </label>
+                <input
+                  type="text"
+                  autoFocus
+                  required
+                  value={mfaCode}
+                  onChange={(e) => setMfaCode(e.target.value)}
+                  placeholder="123456 or ABCD-EF12"
+                  className="w-full rounded-lg border border-[var(--av-border)] bg-[var(--av-surface-muted)] px-3 py-2.5 text-center font-mono text-sm tracking-widest text-[var(--av-text)] focus:bg-[var(--av-surface)] focus:border-[var(--av-accent)] focus:outline-none focus:ring-3 focus:ring-[var(--av-accent-soft)]"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMfaChallenge(null);
+                    setMfaCode('');
+                    setError(null);
+                  }}
+                  className="rounded-lg border border-[var(--av-border)] px-4 py-2.5 text-xs font-medium text-[var(--av-text-muted)]"
+                >
+                  Back
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="flex-1 rounded-lg bg-[var(--av-accent)] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] disabled:opacity-60"
+                >
+                  {loading ? 'Verifying...' : 'Verify & Sign In'}
+                </button>
+              </div>
+            </form>
+          ) : (
           <form onSubmit={handleSubmit} className="mt-5 space-y-3.5">
             {authMode === 'register' && (
               <>
@@ -609,6 +688,7 @@ export function LoginView({ onSuccess }: LoginViewProps) {
               {!loading && <ArrowRight className="h-4 w-4" />}
             </motion.button>
           </form>
+          )}
 
           {authMode === 'signin' && (
             <>

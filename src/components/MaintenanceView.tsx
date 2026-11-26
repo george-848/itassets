@@ -24,7 +24,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { api, ApiError } from '../lib/api.ts';
+import { api, ApiError, type ExtendedTenantContext } from '../lib/api.ts';
+import { getWorkspaceCurrency } from '../lib/currency.ts';
 import { useTheme } from '../lib/theme.tsx';
 import {
   MAINTENANCE_STATUSES,
@@ -36,6 +37,7 @@ import {
   type UserRole,
 } from '../types/itams.ts';
 import type { Ticket } from '../types/saas.ts';
+import { AttachmentsPanel } from './AttachmentsPanel.tsx';
 import { ConfirmDialog } from './ConfirmDialog.tsx';
 import { MaintenanceStatusIndicator, formatCurrencyExact } from './StatusText.tsx';
 import { DataPagination } from './ui/DataPagination.tsx';
@@ -46,6 +48,7 @@ interface MaintenanceViewProps {
   assets: Asset[];
   tickets?: Ticket[];
   userRole: UserRole;
+  tenantCtx?: ExtendedTenantContext | null;
   preselectedAsset: Asset | null;
   onClearPreselectedAsset: () => void;
   onRefresh: () => Promise<void>;
@@ -77,12 +80,21 @@ export function MaintenanceView({
   assets,
   tickets = [],
   userRole,
+  tenantCtx,
   preselectedAsset,
   onClearPreselectedAsset,
   onRefresh,
   onToast,
 }: MaintenanceViewProps) {
   const { theme } = useTheme();
+  const isReadOnly = Boolean(tenantCtx?.isReadOnlyGraceOrExpired);
+  const canManage =
+    !isReadOnly && (tenantCtx ? tenantCtx.permissions.includes('maintenance.manage') : true);
+  const canDelete =
+    !isReadOnly &&
+    (tenantCtx
+      ? tenantCtx.permissions.includes('maintenance.manage') && userRole === 'admin'
+      : userRole === 'admin');
   const [chartMode, setChartMode] = useState<'category' | 'monthly'>('category');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -136,10 +148,12 @@ export function MaintenanceView({
 
   useEffect(() => {
     if (preselectedAsset) {
-      openCreateModal(preselectedAsset);
+      if (canManage) {
+        openCreateModal(preselectedAsset);
+      }
       onClearPreselectedAsset();
     }
-  }, [preselectedAsset]);
+  }, [preselectedAsset, canManage]);
 
   const openEditModal = (log: MaintenanceLog) => {
     setEditingLog(log);
@@ -863,15 +877,17 @@ export function MaintenanceView({
           <span className="text-xs font-medium text-[var(--av-text-subtle)] tabular-nums whitespace-nowrap">
             {filtered.length} of {maintenanceLogs.length} tickets
           </span>
-          <motion.button
-            type="button"
-            whileTap={{ scale: 0.985 }}
-            onClick={() => openCreateModal(null)}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap shrink-0"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Log Maintenance</span>
-          </motion.button>
+          {canManage && (
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.985 }}
+              onClick={() => openCreateModal(null)}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[var(--av-accent)] px-4 py-2 text-xs font-semibold text-white hover:bg-[var(--av-accent-hover)] transition-colors whitespace-nowrap shrink-0"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Log Maintenance</span>
+            </motion.button>
+          )}
         </div>
       </div>
 
@@ -936,10 +952,10 @@ export function MaintenanceView({
                       title="No maintenance records found"
                       description="Adjust filters or log a new hardware repair, upgrade, or scheduled inspection ticket."
                       actionLabel={
-                        maintenanceLogs.length === 0 ? 'Log Maintenance' : undefined
+                        canManage && maintenanceLogs.length === 0 ? 'Log Maintenance' : undefined
                       }
                       onAction={
-                        maintenanceLogs.length === 0
+                        canManage && maintenanceLogs.length === 0
                           ? () => openCreateModal(null)
                           : undefined
                       }
@@ -1008,7 +1024,7 @@ export function MaintenanceView({
                       </td>
                       <td className="py-3 px-4 text-right whitespace-nowrap">
                         <div className="inline-flex items-center justify-end gap-1">
-                          {m.status !== 'Completed' && (
+                          {canManage && m.status !== 'Completed' && (
                             <button
                               type="button"
                               onClick={() => markCompleted(m)}
@@ -1018,15 +1034,17 @@ export function MaintenanceView({
                               <CheckCircle2 className="h-4 w-4" />
                             </button>
                           )}
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(m)}
-                            title="Edit maintenance log"
-                            className="p-1.5 rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/15 transition-colors"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                          {userRole === 'admin' && (
+                          {canManage && (
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(m)}
+                              title="Edit maintenance log"
+                              className="p-1.5 rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/15 transition-colors"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                          )}
+                          {canDelete && (
                             <button
                               type="button"
                               onClick={() => setDeleteTarget(m)}
@@ -1035,6 +1053,9 @@ export function MaintenanceView({
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
+                          )}
+                          {!canManage && !canDelete && (
+                            <span className="text-[11px] text-[var(--av-text-subtle)]">View only</span>
                           )}
                         </div>
                       </td>
@@ -1073,7 +1094,7 @@ export function MaintenanceView({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.97, y: 8 }}
               transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-              className="w-full max-w-xl rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-[0_24px_48px_-12px_rgba(0,0,0,0.38)] overflow-hidden"
+              className="w-full max-w-xl max-h-[90vh] flex flex-col rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-[0_24px_48px_-12px_rgba(0,0,0,0.38)] overflow-hidden"
             >
               <div className="flex items-center justify-between border-b border-[var(--av-border-subtle)] px-6 py-4">
                 <div>
@@ -1096,7 +1117,7 @@ export function MaintenanceView({
                 </button>
               </div>
 
-              <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+              <form onSubmit={handleSubmit} className="overflow-y-auto px-6 py-5 space-y-4">
                 {formError && (
                   <div className="rounded-lg border border-red-300/80 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3.5 py-2.5 text-sm text-red-800 dark:text-red-300">
                     {formError}
@@ -1206,7 +1227,7 @@ export function MaintenanceView({
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-[var(--av-text-muted)] mb-1.5">
-                      Service Cost (USD) *
+                      Service Cost ({getWorkspaceCurrency()}) *
                     </label>
                     <input
                       type="number"
@@ -1328,6 +1349,16 @@ export function MaintenanceView({
                       />
                     </div>
                   </div>
+
+                  {editingLog && (
+                    <AttachmentsPanel
+                      entityType="maintenance"
+                      entityId={editingLog.id}
+                      orgId={editingLog.org_id}
+                      canWrite={canManage}
+                      onToast={onToast}
+                    />
+                  )}
 
                 <div className="flex items-center justify-end gap-2.5 border-t border-[var(--av-border-subtle)] pt-4">
                   <button
