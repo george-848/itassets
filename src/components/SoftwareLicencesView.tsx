@@ -23,9 +23,17 @@ export function SoftwareLicencesView({
   onToast,
   onPlanBlocked,
 }: SoftwareLicencesViewProps) {
-  const [licences, setLicences] = useState<SoftwareLicence[]>([]);
-  const [canViewKeys, setCanViewKeys] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const cachedLicences = api.peekCache<{
+    licences: SoftwareLicence[];
+    canViewKeys: boolean;
+  }>('/api/licences');
+  const [licences, setLicences] = useState<SoftwareLicence[]>(
+    () => cachedLicences?.licences ?? []
+  );
+  const [canViewKeys, setCanViewKeys] = useState(
+    () => cachedLicences?.canViewKeys ?? false
+  );
+  const [loading, setLoading] = useState(!cachedLicences);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -49,7 +57,6 @@ export function SoftwareLicencesView({
     (tenantCtx?.permissions.includes('licences.manage') ?? false);
 
   const loadLicences = async () => {
-    setLoading(true);
     try {
       const res = await api.listLicences();
       setLicences(res.licences);
@@ -65,6 +72,15 @@ export function SoftwareLicencesView({
   };
 
   useEffect(() => {
+    const cached = api.peekCache<{
+      licences: SoftwareLicence[];
+      canViewKeys: boolean;
+    }>('/api/licences');
+    if (cached) {
+      setLicences(cached.licences);
+      setCanViewKeys(cached.canViewKeys);
+      setLoading(false);
+    }
     loadLicences();
   }, [tenantCtx?.tenant.id, tenantCtx?.activeOrg.id, tenantCtx?.isAllOrgsView]);
 
@@ -183,13 +199,7 @@ export function SoftwareLicencesView({
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--av-border-subtle)] text-xs">
-              {loading ? (
-                <tr>
-                  <td colSpan={7} className="p-8 text-center text-[var(--av-text-subtle)]">
-                    Loading software licences...
-                  </td>
-                </tr>
-              ) : paginated.length === 0 ? (
+              {paginated.length === 0 && !loading ? (
                 <tr>
                   <td colSpan={7}>
                     <EmptyState

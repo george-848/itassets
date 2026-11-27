@@ -32,9 +32,13 @@ export function SlaAndContractsView({
   onToast,
   onPlanBlocked,
 }: SlaAndContractsViewProps) {
-  const [policies, setPolicies] = useState<SlaPolicy[]>([]);
-  const [contracts, setContracts] = useState<ServiceContract[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedSla = api.peekCache<{ policies: SlaPolicy[] }>('/api/sla-policies');
+  const cachedCtr = api.peekCache<{ contracts: ServiceContract[] }>('/api/contracts');
+  const [policies, setPolicies] = useState<SlaPolicy[]>(() => cachedSla?.policies ?? []);
+  const [contracts, setContracts] = useState<ServiceContract[]>(
+    () => cachedCtr?.contracts ?? []
+  );
+  const [loading, setLoading] = useState(!cachedSla || !cachedCtr);
   const [sweeping, setSweeping] = useState(false);
 
   const [slaOpen, setSlaOpen] = useState(false);
@@ -65,7 +69,6 @@ export function SlaAndContractsView({
   const canManageContracts = !isReadOnly && perms.includes('contracts.manage');
 
   const loadAll = async () => {
-    setLoading(true);
     try {
       const [slaRes, ctrRes] = await Promise.all([
         api.listSlaPolicies(),
@@ -84,6 +87,11 @@ export function SlaAndContractsView({
   };
 
   useEffect(() => {
+    const cSla = api.peekCache<{ policies: SlaPolicy[] }>('/api/sla-policies');
+    const cCtr = api.peekCache<{ contracts: ServiceContract[] }>('/api/contracts');
+    if (cSla) setPolicies(cSla.policies);
+    if (cCtr) setContracts(cCtr.contracts);
+    if (cSla && cCtr) setLoading(false);
     loadAll();
   }, [tenantCtx?.tenant.id, tenantCtx?.activeOrg.id, tenantCtx?.isAllOrgsView]);
 
@@ -217,9 +225,7 @@ export function SlaAndContractsView({
           <Clock className="h-4 w-4 text-sky-500" />
           <span>SLA Policies ({policies.length})</span>
         </div>
-        {loading ? (
-          <div className="p-6 text-xs text-[var(--av-text-subtle)]">Loading SLA policies...</div>
-        ) : policies.length === 0 ? (
+        {policies.length === 0 && !loading ? (
           <EmptyState
             icon={ShieldCheck}
             title="No custom SLA policies"
@@ -271,9 +277,7 @@ export function SlaAndContractsView({
           <FileCheck2 className="h-4 w-4 text-emerald-500" />
           <span>Service Contracts &amp; Client Retainers ({contracts.length})</span>
         </div>
-        {loading ? (
-          <div className="p-6 text-xs text-[var(--av-text-subtle)]">Loading contracts...</div>
-        ) : contracts.length === 0 ? (
+        {contracts.length === 0 && !loading ? (
           <EmptyState
             icon={FileCheck2}
             title="No service contracts recorded"

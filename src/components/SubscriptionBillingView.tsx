@@ -83,13 +83,33 @@ export function SubscriptionBillingView({
   onRefreshContext,
   onToast,
 }: SubscriptionBillingViewProps) {
-  const [loading, setLoading] = useState(true);
-  const [subscription, setSubscription] = useState<TenantSubscription | null>(null);
-  const [currentPlan, setCurrentPlan] = useState<SubscriptionPlan | null>(null);
-  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
-  const [payments, setPayments] = useState<PaymentTransaction[]>([]);
-  const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
-  const [paystackConfigured, setPaystackConfigured] = useState(false);
+  const cachedBilling = api.peekCache<{
+    subscription: TenantSubscription;
+    plan: SubscriptionPlan;
+    plans: SubscriptionPlan[];
+    payments: PaymentTransaction[];
+    invoices: InvoiceRecord[];
+    paystackConfigured: boolean;
+  }>('/api/billing/subscription');
+  const [loading, setLoading] = useState(!cachedBilling);
+  const [subscription, setSubscription] = useState<TenantSubscription | null>(
+    () => cachedBilling?.subscription ?? tenantCtx?.subscription ?? null
+  );
+  const [currentPlan, setCurrentPlan] = useState<SubscriptionPlan | null>(
+    () => cachedBilling?.plan ?? tenantCtx?.plan ?? null
+  );
+  const [plans, setPlans] = useState<SubscriptionPlan[]>(
+    () => cachedBilling?.plans ?? []
+  );
+  const [payments, setPayments] = useState<PaymentTransaction[]>(
+    () => cachedBilling?.payments ?? []
+  );
+  const [invoices, setInvoices] = useState<InvoiceRecord[]>(
+    () => cachedBilling?.invoices ?? []
+  );
+  const [paystackConfigured, setPaystackConfigured] = useState(
+    () => cachedBilling?.paystackConfigured ?? false
+  );
 
   const [cycle, setCycle] = useState<BillingCycle>('monthly');
   const [checkoutBusy, setCheckoutBusy] = useState<PlanCode | null>(null);
@@ -105,7 +125,6 @@ export function SubscriptionBillingView({
     tenantCtx?.permissions.includes('billing.manage') ?? false;
 
   const loadBilling = async () => {
-    setLoading(true);
     try {
       const res = await api.getBilling();
       setSubscription(res.subscription);
@@ -125,6 +144,23 @@ export function SubscriptionBillingView({
   };
 
   useEffect(() => {
+    const cached = api.peekCache<{
+      subscription: TenantSubscription;
+      plan: SubscriptionPlan;
+      plans: SubscriptionPlan[];
+      payments: PaymentTransaction[];
+      invoices: InvoiceRecord[];
+      paystackConfigured: boolean;
+    }>('/api/billing/subscription');
+    if (cached) {
+      setSubscription(cached.subscription);
+      setCurrentPlan(cached.plan);
+      setPlans(cached.plans);
+      setPayments(cached.payments);
+      setInvoices(cached.invoices);
+      setPaystackConfigured(cached.paystackConfigured);
+      setLoading(false);
+    }
     loadBilling();
   }, [tenantCtx?.tenant.id]);
 

@@ -36,6 +36,7 @@ import {
   deleteTenantFirestoreData,
   fetchFirestoreCollectionCounts,
   fetchFirestoreDocuments,
+  fetchSingleFirestoreCollectionCount,
   FIRESTORE_COLLECTION_CATALOG,
   getFirestoreCollectionMeta,
   parseCollectionSegments,
@@ -530,12 +531,35 @@ export function PlatformFirestoreTab({
     }
   }, [isSuperAdminReady]);
 
+  const refreshActiveCollectionOnly = useCallback(async () => {
+    if (!isSuperAdminReady) return;
+    setLoadingDocs(true);
+    try {
+      const [nextDocs, nextSingleCount] = await Promise.all([
+        fetchFirestoreDocuments(selectedCollection, tenantFilter || undefined, 250),
+        isCustomCollection
+          ? Promise.resolve<number | null>(null)
+          : fetchSingleFirestoreCollectionCount(selectedCollection),
+      ]);
+      setDocs(nextDocs);
+      setCounts((prev) => ({
+        ...prev,
+        [selectedCollection]:
+          nextSingleCount !== null ? nextSingleCount : nextDocs.length,
+      }));
+    } catch (err) {
+      onToast('error', parseFirestoreUiError(err));
+    } finally {
+      setLoadingDocs(false);
+    }
+  }, [isSuperAdminReady, selectedCollection, tenantFilter, isCustomCollection, onToast]);
+
   const refreshCountsAndDocs = useCallback(async () => {
     if (!isSuperAdminReady) return;
     setLoadingDocs(true);
     try {
       const [ok, nextCounts, nextDocs] = await Promise.all([
-        testConnection(true),
+        testConnection(false),
         fetchFirestoreCollectionCounts(),
         fetchFirestoreDocuments(selectedCollection, tenantFilter || undefined, 250),
       ]);
@@ -552,15 +576,31 @@ export function PlatformFirestoreTab({
     }
   }, [isSuperAdminReady, selectedCollection, tenantFilter, isCustomCollection, onToast]);
 
+  // Initial connection check, collection counts, and audit feed once per Super Admin session
   useEffect(() => {
     if (isSuperAdminReady) {
-      void refreshCountsAndDocs();
+      void (async () => {
+        const [ok, nextCounts] = await Promise.all([
+          testConnection(false),
+          fetchFirestoreCollectionCounts(),
+        ]);
+        setConnectionOk(ok);
+        setCounts((prev) => ({ ...prev, ...nextCounts }));
+      })();
       void fetchRecentAudits();
     } else {
+      setConnectionOk(null);
       setDocs([]);
       setRecentAudits([]);
     }
-  }, [isSuperAdminReady, refreshCountsAndDocs, fetchRecentAudits]);
+  }, [isSuperAdminReady, fetchRecentAudits]);
+
+  // Fast single-collection fetch when switching collections or tenant filter
+  useEffect(() => {
+    if (isSuperAdminReady) {
+      void refreshActiveCollectionOnly();
+    }
+  }, [isSuperAdminReady, refreshActiveCollectionOnly]);
 
   // Reset per-collection view state when switching collections
   useEffect(() => {
@@ -699,7 +739,12 @@ export function PlatformFirestoreTab({
         'success',
         `Synced ${res.syncedCount} Firestore document(s)${pruneNote} across ${res.collectionsTouched.length} collection(s).`
       );
-      await Promise.all([refreshCountsAndDocs(), fetchRecentAudits()]);
+      await Promise.all([
+        options?.onlyCollection
+          ? refreshActiveCollectionOnly()
+          : refreshCountsAndDocs(),
+        fetchRecentAudits(),
+      ]);
       await onAuditRecorded?.();
     } catch (err) {
       onToast(
@@ -937,7 +982,7 @@ export function PlatformFirestoreTab({
         `${editorMode === 'create' ? 'Created' : 'Updated'} ${selectedCollection}/${result.docId}${auditNote}.`
       );
       setEditorMode(null);
-      await Promise.all([refreshCountsAndDocs(), fetchRecentAudits()]);
+      await Promise.all([refreshActiveCollectionOnly(), fetchRecentAudits()]);
       await onAuditRecorded?.();
     } catch (err) {
       setEditorError(parseFirestoreUiError(err));
@@ -956,7 +1001,7 @@ export function PlatformFirestoreTab({
         `Deleted Firestore document ${deleteTarget.collection}/${deleteTarget.docId} (audit log recorded).`
       );
       setDeleteTarget(null);
-      await Promise.all([refreshCountsAndDocs(), fetchRecentAudits()]);
+      await Promise.all([refreshActiveCollectionOnly(), fetchRecentAudits()]);
       await onAuditRecorded?.();
     } catch (err) {
       onToast('error', parseFirestoreUiError(err));
@@ -1592,11 +1637,7 @@ export function PlatformFirestoreTab({
               </div>
 
               <div className="overflow-x-auto max-h-[500px]">
-                {loadingDocs ? (
-                  <div className="p-10 text-center text-xs text-[var(--av-text-subtle)]">
-                    Fetching Cloud Firestore collection <span className="font-mono">{selectedCollection}</span>...
-                  </div>
-                ) : filteredAndSortedDocs.length === 0 ? (
+                {filteredAndSortedDocs.length === 0 && !loadingDocs ? (
                   <div className="p-10 text-center text-xs text-[var(--av-text-subtle)] space-y-2">
                     <div>
                       No Firestore documents returned for <span className="font-mono">{selectedCollection}</span>

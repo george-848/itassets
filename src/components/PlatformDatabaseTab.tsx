@@ -143,8 +143,30 @@ export function PlatformDatabaseTab({
   onRefreshPlatform,
   onToast,
 }: PlatformDatabaseTabProps) {
-  const [engine, setEngine] = useState<string>('loading');
-  const [collections, setCollections] = useState<PlatformDbCollectionMeta[]>([]);
+  const cachedOverviewInit = api.peekCache<{
+    engine: string;
+    collections: PlatformDbCollectionMeta[];
+    tenants: Array<{
+      id: string;
+      name: string;
+      type: TenantType;
+      planCode: PlanCode;
+      status: Tenant['status'];
+    }>;
+  }>('/api/platform/database/overview');
+  const cachedRecordsInit = api.peekCache<{
+    collection: string;
+    meta: PlatformDbCollectionMeta;
+    totalCount: number;
+    records: Array<Record<string, unknown>>;
+  }>('/api/platform/database/records?collection=assets&limit=200');
+
+  const [engine, setEngine] = useState<string>(
+    () => cachedOverviewInit?.engine ?? 'mongodb'
+  );
+  const [collections, setCollections] = useState<PlatformDbCollectionMeta[]>(
+    () => cachedOverviewInit?.collections ?? []
+  );
   const [tenants, setTenants] = useState<
     Array<{
       id: string;
@@ -153,14 +175,18 @@ export function PlatformDatabaseTab({
       planCode: PlanCode;
       status: Tenant['status'];
     }>
-  >([]);
+  >(() => cachedOverviewInit?.tenants ?? []);
 
   const [selectedCollection, setSelectedCollection] = useState<string>('assets');
   const [tenantFilter, setTenantFilter] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [records, setRecords] = useState<Array<Record<string, unknown>>>([]);
-  const [totalCount, setTotalCount] = useState<number>(0);
-  const [loadingOverview, setLoadingOverview] = useState<boolean>(true);
+  const [records, setRecords] = useState<Array<Record<string, unknown>>>(
+    () => cachedRecordsInit?.records ?? []
+  );
+  const [totalCount, setTotalCount] = useState<number>(
+    () => cachedRecordsInit?.totalCount ?? 0
+  );
+  const [loadingOverview, setLoadingOverview] = useState<boolean>(false);
   const [loadingRecords, setLoadingRecords] = useState<boolean>(false);
 
   // Create / Edit Modal
@@ -217,9 +243,32 @@ export function PlatformDatabaseTab({
   }, [collections]);
 
   const loadOverview = async (overrideTenantId?: string) => {
-    setLoadingOverview(true);
+    const tid = overrideTenantId !== undefined ? overrideTenantId : tenantFilter;
+    const overviewPath = tid
+      ? `/api/platform/database/overview?tenantId=${encodeURIComponent(tid)}`
+      : '/api/platform/database/overview';
+    const cached = api.peekCache<{
+      engine: string;
+      collections: PlatformDbCollectionMeta[];
+      tenants: Array<{
+        id: string;
+        name: string;
+        type: TenantType;
+        planCode: PlanCode;
+        status: Tenant['status'];
+      }>;
+    }>(overviewPath);
+    if (cached) {
+      setEngine(cached.engine);
+      setCollections(cached.collections);
+      setTenants(cached.tenants);
+      if (!opTenantId && cached.tenants[0]) {
+        setOpTenantId(cached.tenants[0].id);
+      }
+    } else {
+      setLoadingOverview(true);
+    }
     try {
-      const tid = overrideTenantId !== undefined ? overrideTenantId : tenantFilter;
       const res = await api.getPlatformDatabaseOverview(tid || undefined);
       setEngine(res.engine);
       setCollections(res.collections);
@@ -242,7 +291,23 @@ export function PlatformDatabaseTab({
     tid = tenantFilter,
     q = searchQuery
   ) => {
-    setLoadingRecords(true);
+    const qs = new URLSearchParams();
+    qs.set('collection', col);
+    if (tid) qs.set('tenantId', tid);
+    if (q.trim()) qs.set('q', q.trim());
+    qs.set('limit', '200');
+    const cached = api.peekCache<{
+      collection: string;
+      meta: PlatformDbCollectionMeta;
+      totalCount: number;
+      records: Array<Record<string, unknown>>;
+    }>(`/api/platform/database/records?${qs.toString()}`);
+    if (cached) {
+      setRecords(cached.records);
+      setTotalCount(cached.totalCount);
+    } else {
+      setLoadingRecords(true);
+    }
     try {
       const res = await api.getPlatformDatabaseRecords({
         collection: col,
@@ -571,11 +636,7 @@ export function PlatformDatabaseTab({
           </div>
 
           <div className="overflow-x-auto max-h-[480px]">
-            {loadingRecords ? (
-              <div className="p-10 text-center text-xs text-[var(--av-text-subtle)]">
-                Querying {selectedCollection}...
-              </div>
-            ) : records.length === 0 ? (
+            {records.length === 0 && !loadingRecords ? (
               <div className="p-10 text-center text-xs text-[var(--av-text-subtle)]">
                 No records found in {selectedCollection}
                 {tenantFilter ? ' for this tenant' : ''}.

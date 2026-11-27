@@ -4,23 +4,37 @@ import {
   doc,
   getDocFromServer,
   getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   serverTimestamp,
   setDoc,
   type Firestore,
 } from 'firebase/firestore';
-import { getStorage, type FirebaseStorage } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 export const app: FirebaseApp =
   getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
+function createFirestoreClient(): Firestore {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+        }),
+      },
+      firebaseConfig.firestoreDatabaseId
+    );
+  } catch {
+    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  }
+}
+
 // CRITICAL: Pass firestoreDatabaseId explicitly so the provisioned Enterprise database is targeted.
-export const db: Firestore = getFirestore(
-  app,
-  firebaseConfig.firestoreDatabaseId
-);
+export const db: Firestore = createFirestoreClient();
 export const auth: Auth = getAuth(app);
-export const storage: FirebaseStorage = getStorage(app);
 
 export enum OperationType {
   CREATE = 'create',

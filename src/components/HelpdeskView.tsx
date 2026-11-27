@@ -90,8 +90,9 @@ export function HelpdeskView({
   onToast,
   onPlanBlocked,
 }: HelpdeskViewProps) {
-  const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedTickets = api.peekCache<{ tickets: Ticket[] }>('/api/tickets');
+  const [tickets, setTickets] = useState<Ticket[]>(() => cachedTickets?.tickets ?? []);
+  const [loading, setLoading] = useState(!cachedTickets);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [priorityFilter, setPriorityFilter] = useState<string>('ALL');
@@ -128,7 +129,6 @@ export function HelpdeskView({
   const canInternalNotes = !isReadOnly && perms.includes('tickets.internal_notes');
 
   const loadTickets = async () => {
-    setLoading(true);
     try {
       const res = await api.listTickets();
       setTickets(res.tickets);
@@ -143,6 +143,11 @@ export function HelpdeskView({
   };
 
   useEffect(() => {
+    const cached = api.peekCache<{ tickets: Ticket[] }>('/api/tickets');
+    if (cached) {
+      setTickets(cached.tickets);
+      setLoading(false);
+    }
     loadTickets();
     if (tenantCtx?.activeOrg.id) {
       setOrgId(tenantCtx.activeOrg.id);
@@ -417,13 +422,7 @@ export function HelpdeskView({
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--av-border-subtle)] text-sm">
-              {loading ? (
-                <tr>
-                  <td colSpan={8} className="p-8 text-center text-xs text-[var(--av-text-subtle)]">
-                    Loading helpdesk queue...
-                  </td>
-                </tr>
-              ) : paginated.length === 0 ? (
+              {paginated.length === 0 && !loading ? (
                 <tr>
                   <td colSpan={8}>
                     <EmptyState

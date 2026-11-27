@@ -11,8 +11,9 @@ interface AuditLogsViewProps {
 }
 
 export function AuditLogsView({ tenantCtx, onToast }: AuditLogsViewProps) {
-  const [logs, setLogs] = useState<AuditLogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedLogs = api.peekCache<{ auditLogs: AuditLogEntry[] }>('/api/audit-logs');
+  const [logs, setLogs] = useState<AuditLogEntry[]>(() => cachedLogs?.auditLogs ?? []);
+  const [loading, setLoading] = useState(!cachedLogs);
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState('ALL');
   const [page, setPage] = useState(1);
@@ -20,8 +21,12 @@ export function AuditLogsView({ tenantCtx, onToast }: AuditLogsViewProps) {
 
   useEffect(() => {
     let active = true;
+    const cached = api.peekCache<{ auditLogs: AuditLogEntry[] }>('/api/audit-logs');
+    if (cached) {
+      setLogs(cached.auditLogs);
+      setLoading(false);
+    }
     async function load() {
-      setLoading(true);
       try {
         const res = await api.listAuditLogs();
         if (active) setLogs(res.auditLogs);
@@ -114,13 +119,7 @@ export function AuditLogsView({ tenantCtx, onToast }: AuditLogsViewProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--av-border-subtle)] text-xs">
-              {loading ? (
-                <tr>
-                  <td colSpan={4} className="p-8 text-center text-[var(--av-text-subtle)]">
-                    Loading workspace audit trail...
-                  </td>
-                </tr>
-              ) : paginated.length === 0 ? (
+              {paginated.length === 0 && !loading ? (
                 <tr>
                   <td colSpan={4}>
                     <EmptyState

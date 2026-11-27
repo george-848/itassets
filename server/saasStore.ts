@@ -404,6 +404,8 @@ export class SaasStore {
   private mongoDb: Db | null = null;
   private readonly sqlitePath: string;
   private initialized = false;
+  private activePersistPromise: Promise<void> | null = null;
+  private queuedPersistPromise: Promise<void> | null = null;
 
   constructor(sqlitePathOverride?: string) {
     this.sqlitePath =
@@ -429,6 +431,7 @@ export class SaasStore {
         this.mongoClient = new MongoClient(mongoUri, {
           serverSelectionTimeoutMS: 8000,
           connectTimeoutMS: 8000,
+          maxPoolSize: 10,
           family: 4,
         });
         await this.mongoClient.connect();
@@ -506,7 +509,7 @@ export class SaasStore {
     return this.state;
   }
 
-  async persist(): Promise<void> {
+  private async writeSnapshotNow(): Promise<void> {
     const now = new Date().toISOString();
     if (this.mongoDb) {
       await this.mongoDb
@@ -526,6 +529,25 @@ export class SaasStore {
         )
         .run('state_v1', JSON.stringify(this.state), now);
     }
+  }
+
+  async persist(): Promise<void> {
+    if (!this.activePersistPromise) {
+      this.activePersistPromise = this.writeSnapshotNow().finally(() => {
+        this.activePersistPromise = null;
+      });
+      return this.activePersistPromise;
+    }
+
+    if (!this.queuedPersistPromise) {
+      this.queuedPersistPromise = this.activePersistPromise
+        .catch(() => {})
+        .then(async () => {
+          this.queuedPersistPromise = null;
+          return this.persist();
+        });
+    }
+    return this.queuedPersistPromise;
   }
 
   async mutate<T>(fn: (state: SaasState) => T | Promise<T>): Promise<T> {

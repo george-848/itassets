@@ -88,6 +88,7 @@ export function registerSaasRoutes(params: {
   // Public Plans & Paystack Webhook (No session required for webhook/plans)
   // -------------------------------------------------------------------------
   app.get('/api/billing/plans', (_req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
     res.json({
       plans: store.data.plans.filter((p) => p.isPublic),
       currency: 'GHS',

@@ -40,6 +40,35 @@ export function verifyPassword(password: string, storedHash: string): boolean {
   return crypto.timingSafeEqual(keyBuf, derivedBuf);
 }
 
+function scryptAsync(password: string, salt: string, keylen: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(password, salt, keylen, (err, derivedKey) => {
+      if (err) reject(err);
+      else resolve(derivedKey);
+    });
+  });
+}
+
+export async function hashPasswordAsync(password: string): Promise<string> {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = (await scryptAsync(password, salt, 64)).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+export async function verifyPasswordAsync(
+  password: string,
+  storedHash: string
+): Promise<boolean> {
+  const parts = storedHash.split(':');
+  if (parts.length !== 2) return false;
+  const [salt, keyHex] = parts;
+  if (!salt || !keyHex) return false;
+  const keyBuf = Buffer.from(keyHex, 'hex');
+  const derivedBuf = await scryptAsync(password, salt, 64);
+  if (keyBuf.length !== derivedBuf.length) return false;
+  return crypto.timingSafeEqual(keyBuf, derivedBuf);
+}
+
 export function signSessionToken(user: Pick<User, 'id' | 'email' | 'role'>): string {
   const payload: SessionPayload = {
     userId: user.id,

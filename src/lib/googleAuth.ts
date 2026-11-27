@@ -1,21 +1,16 @@
-import { getApp, getApps, initializeApp } from 'firebase/app';
 import {
   GoogleAuthProvider,
-  getAuth,
   onAuthStateChanged,
   signInWithPopup,
   signOut,
   type Unsubscribe,
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { auth } from './firebase.ts';
 
 export const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
 ];
-
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-const auth = getAuth(app);
 
 const provider = new GoogleAuthProvider();
 for (const scope of SCOPES) {

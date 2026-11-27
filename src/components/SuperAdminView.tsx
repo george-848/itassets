@@ -63,8 +63,36 @@ const ALL_FEATURES: FeatureKey[] = [
 ];
 
 export function SuperAdminView({ onRefreshContext, onToast }: SuperAdminViewProps) {
+  const cachedOverview = api.peekCache<{
+    kpis: {
+      totalTenants: number;
+      companyTenants: number;
+      mspTenants: number;
+      activeSubscriptions: number;
+      trialTenants: number;
+      totalUsers: number;
+      totalAssets: number;
+      mrrGhs: number;
+      arrGhs: number;
+      totalRevenueGhs: number;
+    };
+    tenants: Array<{
+      tenant: Tenant;
+      subscription: TenantSubscription | null;
+      orgCount: number;
+      userCount: number;
+      assetCount: number;
+    }>;
+    plans: SubscriptionPlan[];
+    payments: PaymentTransaction[];
+    settings: PlatformSettings;
+    platformAuditLogs: AuditLogEntry[];
+  }>('/api/platform/overview');
+  const cachedOutbox = api.peekCache<{ outbox: EmailOutboxEntry[] }>(
+    '/api/platform/email/outbox'
+  );
   const [tab, setTab] = useState<AdminTab>('tenants');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!cachedOverview);
   const [kpis, setKpis] = useState<{
     totalTenants: number;
     companyTenants: number;
@@ -76,7 +104,7 @@ export function SuperAdminView({ onRefreshContext, onToast }: SuperAdminViewProp
     mrrGhs: number;
     arrGhs: number;
     totalRevenueGhs: number;
-  } | null>(null);
+  } | null>(() => cachedOverview?.kpis ?? null);
   const [tenants, setTenants] = useState<
     Array<{
       tenant: Tenant;
@@ -85,11 +113,19 @@ export function SuperAdminView({ onRefreshContext, onToast }: SuperAdminViewProp
       userCount: number;
       assetCount: number;
     }>
-  >([]);
-  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
-  const [payments, setPayments] = useState<PaymentTransaction[]>([]);
-  const [settings, setSettings] = useState<PlatformSettings | null>(null);
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  >(() => cachedOverview?.tenants ?? []);
+  const [plans, setPlans] = useState<SubscriptionPlan[]>(
+    () => cachedOverview?.plans ?? []
+  );
+  const [payments, setPayments] = useState<PaymentTransaction[]>(
+    () => cachedOverview?.payments ?? []
+  );
+  const [settings, setSettings] = useState<PlatformSettings | null>(
+    () => cachedOverview?.settings ?? null
+  );
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(
+    () => cachedOverview?.platformAuditLogs ?? []
+  );
 
   // Edit Tenant Modal
   const [editTenant, setEditTenant] = useState<{
@@ -106,7 +142,9 @@ export function SuperAdminView({ onRefreshContext, onToast }: SuperAdminViewProp
   const [deletingTenant, setDeletingTenant] = useState(false);
   const [resetConfirmText, setResetConfirmText] = useState('');
   const [resettingDb, setResettingDb] = useState(false);
-  const [outbox, setOutbox] = useState<EmailOutboxEntry[]>([]);
+  const [outbox, setOutbox] = useState<EmailOutboxEntry[]>(
+    () => cachedOutbox?.outbox ?? []
+  );
   const [testEmailTo, setTestEmailTo] = useState('');
   const [sendingTestEmail, setSendingTestEmail] = useState(false);
 
@@ -158,7 +196,6 @@ export function SuperAdminView({ onRefreshContext, onToast }: SuperAdminViewProp
   const [refundReason, setRefundReason] = useState('');
 
   const loadOverview = async () => {
-    setLoading(true);
     try {
       const [res, outboxRes] = await Promise.all([
         api.getPlatformOverview(),
@@ -581,11 +618,7 @@ export function SuperAdminView({ onRefreshContext, onToast }: SuperAdminViewProp
         )}
       </div>
 
-      {loading ? (
-        <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-10 text-center text-xs text-[var(--av-text-subtle)]">
-          Loading Super Admin control plane...
-        </div>
-      ) : tab === 'tenants' ? (
+      {tab === 'tenants' ? (
         <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-[var(--av-card-shadow)] overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">

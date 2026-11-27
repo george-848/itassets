@@ -56,6 +56,20 @@ const TOKEN_STORAGE_KEY = 'assetvault_session_token';
 const TENANT_STORAGE_KEY = 'assetvault_active_tenant_id';
 const ORG_STORAGE_KEY = 'assetvault_active_org_id';
 
+const readCache = new Map<string, unknown>();
+
+function cacheKey(
+  path: string,
+  tenantId: string | null = getActiveTenantId(),
+  orgId: string | null = getActiveOrgId()
+): string {
+  return `${tenantId || ''}|${orgId || ''}|${path}`;
+}
+
+export function clearApiCache(): void {
+  readCache.clear();
+}
+
 export function getStoredToken(): string | null {
   try {
     return window.localStorage.getItem(TOKEN_STORAGE_KEY);
@@ -70,6 +84,7 @@ export function setStoredToken(token: string | null): void {
       window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
     } else {
       window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+      readCache.clear();
     }
   } catch {
     // Ignore storage errors
@@ -86,6 +101,10 @@ export function getActiveTenantId(): string | null {
 
 export function setActiveTenantId(tenantId: string | null): void {
   try {
+    const prev = getActiveTenantId();
+    if (prev !== tenantId) {
+      readCache.clear();
+    }
     if (tenantId) {
       window.localStorage.setItem(TENANT_STORAGE_KEY, tenantId);
     } else {
@@ -106,6 +125,10 @@ export function getActiveOrgId(): string | null {
 
 export function setActiveOrgId(orgId: string | null): void {
   try {
+    const prev = getActiveOrgId();
+    if (prev !== orgId) {
+      readCache.clear();
+    }
     if (orgId) {
       window.localStorage.setItem(ORG_STORAGE_KEY, orgId);
     } else {
@@ -132,6 +155,10 @@ async function request<T>(
   options: { skipAuth?: boolean } = {}
 ): Promise<T> {
   const token = options.skipAuth ? null : getStoredToken();
+  const activeTenantId = options.skipAuth ? null : getActiveTenantId();
+  const activeOrgId = options.skipAuth ? null : getActiveOrgId();
+  const method = (init.method || 'GET').toUpperCase();
+
   const headers = new Headers(init.headers);
   if (!headers.has('Content-Type') && init.body) {
     headers.set('Content-Type', 'application/json');
@@ -140,8 +167,6 @@ async function request<T>(
     headers.set('Authorization', `Bearer ${token}`);
   }
   if (!options.skipAuth) {
-    const activeTenantId = getActiveTenantId();
-    const activeOrgId = getActiveOrgId();
     if (activeTenantId) headers.set('X-Tenant-Id', activeTenantId);
     if (activeOrgId) headers.set('X-Org-Id', activeOrgId);
   }
@@ -181,6 +206,14 @@ async function request<T>(
     throw new ApiError(message, res.status, code);
   }
 
+  if (!options.skipAuth) {
+    if (method === 'GET') {
+      readCache.set(cacheKey(path, activeTenantId, activeOrgId), data);
+    } else {
+      readCache.clear();
+    }
+  }
+
   return data as T;
 }
 
@@ -195,6 +228,33 @@ export interface ExtendedTenantContext extends TenantContextPayload {
   isAllOrgsView: boolean;
   isSuperAdmin: boolean;
 }
+
+export interface WorkspaceBootstrapPayload {
+  user: User;
+  engine: string;
+  context: ExtendedTenantContext;
+  dashboard: DashboardSummary | null;
+  assets: Asset[];
+  employees: Employee[];
+  assignments: AssetAssignment[];
+  maintenanceLogs: MaintenanceLog[];
+  notifications: SystemNotification[];
+  users: ExtendedUser[];
+  tickets: Ticket[];
+  licences: SoftwareLicence[];
+  purchaseOrders: PurchaseOrder[];
+}
+
+const PUBLIC_PLANS_CACHE_KEY = 'assetvault_public_plans_v1';
+const PUBLIC_PLANS_TTL_MS = 60_000;
+let cachedPublicPlans: {
+  expiresAt: number;
+  data: { plans: SubscriptionPlan[]; currency: 'GHS' };
+} | null = null;
+let publicPlansInFlight: Promise<{
+  plans: SubscriptionPlan[];
+  currency: 'GHS';
+}> | null = null;
 
 export type PlatformDbCollectionCategory =
   | 'Core SaaS'
@@ -368,12 +428,77 @@ export const api = {
   logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
   me: () => request<{ user: User; engine: string }>('/api/auth/me'),
   getContext: () => request<ExtendedTenantContext>('/api/auth/context'),
-  getPublicPlans: () =>
-    request<{ plans: SubscriptionPlan[]; currency: 'GHS' }>(
-      '/api/billing/plans',
-      {},
-      { skipAuth: true }
-    ),
+  peekCache: <T>(path: string): T | null =>
+    (readCache.get(cacheKey(path)) as T | undefined) ?? null,
+  bootstrap: async () => {
+    const boot = await request<WorkspaceBootstrapPayload>('/api/bootstrap');
+    const resolvedTid = boot.context.tenant.id;
+    const resolvedOid = boot.context.isAllOrgsView ? 'all' : boot.context.activeOrg.id;
+    const seedScope = (tid: string | null, oid: string | null) => {
+      if (boot.dashboard) {
+        readCache.set(cacheKey('/api/dashboard', tid, oid), boot.dashboard);
+      }
+      readCache.set(cacheKey('/api/assets', tid, oid), { assets: boot.assets });
+      readCache.set(cacheKey('/api/employees', tid, oid), { employees: boot.employees });
+      readCache.set(cacheKey('/api/assignments', tid, oid), { assignments: boot.assignments });
+      readCache.set(cacheKey('/api/maintenance', tid, oid), { maintenanceLogs: boot.maintenanceLogs });
+      readCache.set(cacheKey('/api/notifications', tid, oid), { notifications: boot.notifications });
+      readCache.set(cacheKey('/api/users', tid, oid), { users: boot.users });
+      readCache.set(cacheKey('/api/tickets', tid, oid), { tickets: boot.tickets });
+      readCache.set(cacheKey('/api/licences', tid, oid), {
+        licences: boot.licences,
+        canViewKeys: boot.context.permissions.includes('licences.view_keys'),
+      });
+    };
+    seedScope(resolvedTid, resolvedOid);
+    seedScope(getActiveTenantId(), getActiveOrgId());
+    return boot;
+  },
+  getPublicPlans: () => {
+    const now = Date.now();
+    if (cachedPublicPlans && cachedPublicPlans.expiresAt > now) {
+      return Promise.resolve(cachedPublicPlans.data);
+    }
+    try {
+      const raw = window.sessionStorage.getItem(PUBLIC_PLANS_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          expiresAt: number;
+          data: { plans: SubscriptionPlan[]; currency: 'GHS' };
+        };
+        if (parsed && parsed.expiresAt > now && Array.isArray(parsed.data?.plans)) {
+          cachedPublicPlans = parsed;
+          return Promise.resolve(parsed.data);
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+    if (!publicPlansInFlight) {
+      publicPlansInFlight = request<{ plans: SubscriptionPlan[]; currency: 'GHS' }>(
+        '/api/billing/plans',
+        {},
+        { skipAuth: true }
+      )
+        .then((data) => {
+          const entry = { expiresAt: Date.now() + PUBLIC_PLANS_TTL_MS, data };
+          cachedPublicPlans = entry;
+          try {
+            window.sessionStorage.setItem(
+              PUBLIC_PLANS_CACHE_KEY,
+              JSON.stringify(entry)
+            );
+          } catch {
+            // Ignore storage quota errors
+          }
+          return data;
+        })
+        .finally(() => {
+          publicPlansInFlight = null;
+        });
+    }
+    return publicPlansInFlight;
+  },
 
   // Dashboard
   getDashboard: () => request<DashboardSummary>('/api/dashboard'),

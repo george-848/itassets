@@ -38,10 +38,21 @@ export function OrgStructureView({
   onPlanBlocked,
 }: OrgStructureViewProps) {
   const [tab, setTab] = useState<OrgTab>('organisations');
-  const [loading, setLoading] = useState(true);
-  const [organisations, setOrganisations] = useState<ClientOrganisation[]>([]);
-  const [locations, setLocations] = useState<LocationItem[]>([]);
-  const [departments, setDepartments] = useState<DepartmentItem[]>([]);
+  const cachedOrgs = api.peekCache<{
+    organisations: ClientOrganisation[];
+    locations: LocationItem[];
+    departments: DepartmentItem[];
+  }>('/api/orgs');
+  const [loading, setLoading] = useState(!cachedOrgs);
+  const [organisations, setOrganisations] = useState<ClientOrganisation[]>(
+    () => cachedOrgs?.organisations ?? []
+  );
+  const [locations, setLocations] = useState<LocationItem[]>(
+    () => cachedOrgs?.locations ?? []
+  );
+  const [departments, setDepartments] = useState<DepartmentItem[]>(
+    () => cachedOrgs?.departments ?? []
+  );
 
   const [orgModalOpen, setOrgModalOpen] = useState(false);
   const [orgName, setOrgName] = useState('');
@@ -74,7 +85,6 @@ export function OrgStructureView({
   const canManage = !isReadOnly && (tenantCtx?.permissions.includes('org.manage') ?? false);
 
   const loadOrgs = async () => {
-    setLoading(true);
     try {
       const res = await api.listOrgs();
       setOrganisations(res.organisations);
@@ -91,6 +101,17 @@ export function OrgStructureView({
   };
 
   useEffect(() => {
+    const cached = api.peekCache<{
+      organisations: ClientOrganisation[];
+      locations: LocationItem[];
+      departments: DepartmentItem[];
+    }>('/api/orgs');
+    if (cached) {
+      setOrganisations(cached.organisations);
+      setLocations(cached.locations);
+      setDepartments(cached.departments);
+      setLoading(false);
+    }
     loadOrgs();
   }, [tenantCtx?.tenant.id, tenantCtx?.activeOrg.id]);
 
@@ -257,13 +278,9 @@ export function OrgStructureView({
         )}
       </div>
 
-      {loading ? (
-        <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-10 text-center text-xs text-[var(--av-text-subtle)]">
-          Loading organisation hierarchy...
-        </div>
-      ) : tab === 'organisations' ? (
+      {tab === 'organisations' ? (
         <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-[var(--av-card-shadow)] overflow-hidden">
-          {organisations.length === 0 ? (
+          {organisations.length === 0 && !loading ? (
             <EmptyState
               icon={Building2}
               title="No client organisations"

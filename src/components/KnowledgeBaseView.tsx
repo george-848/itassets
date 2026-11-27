@@ -19,8 +19,11 @@ export function KnowledgeBaseView({
   onToast,
   onPlanBlocked,
 }: KnowledgeBaseViewProps) {
-  const [articles, setArticles] = useState<KnowledgeArticle[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedKb = api.peekCache<{ articles: KnowledgeArticle[] }>('/api/kb');
+  const [articles, setArticles] = useState<KnowledgeArticle[]>(
+    () => cachedKb?.articles ?? []
+  );
+  const [loading, setLoading] = useState(!cachedKb);
   const [search, setSearch] = useState('');
   const [visibilityFilter, setVisibilityFilter] = useState<
     'ALL' | 'public_portal' | 'internal_it'
@@ -42,7 +45,6 @@ export function KnowledgeBaseView({
   const canManage = !tenantCtx?.isReadOnlyGraceOrExpired && perms.includes('kb.manage');
 
   const loadKb = async () => {
-    setLoading(true);
     try {
       const res = await api.listKb();
       setArticles(res.articles);
@@ -57,6 +59,11 @@ export function KnowledgeBaseView({
   };
 
   useEffect(() => {
+    const cached = api.peekCache<{ articles: KnowledgeArticle[] }>('/api/kb');
+    if (cached) {
+      setArticles(cached.articles);
+      setLoading(false);
+    }
     loadKb();
   }, [tenantCtx?.tenant.id, tenantCtx?.activeOrg.id]);
 
@@ -157,11 +164,7 @@ export function KnowledgeBaseView({
         )}
       </div>
 
-      {loading ? (
-        <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-10 text-center text-xs text-[var(--av-text-subtle)]">
-          Loading Knowledge Base...
-        </div>
-      ) : filtered.length === 0 ? (
+      {filtered.length === 0 && !loading ? (
         <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-[var(--av-card-shadow)]">
           <EmptyState
             icon={BookOpen}

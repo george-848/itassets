@@ -44,10 +44,19 @@ export function ProcurementView({
   onPlanBlocked,
 }: ProcurementViewProps) {
   const [tab, setTab] = useState<ProcTab>('orders');
-  const [loading, setLoading] = useState(true);
-  const [vendors, setVendors] = useState<Vendor[]>([]);
-  const [requests, setRequests] = useState<PurchaseRequest[]>([]);
-  const [orders, setOrders] = useState<PurchaseOrder[]>([]);
+  const cachedProc = api.peekCache<{
+    vendors: Vendor[];
+    purchaseRequests: PurchaseRequest[];
+    purchaseOrders: PurchaseOrder[];
+  }>('/api/procurement');
+  const [loading, setLoading] = useState(!cachedProc);
+  const [vendors, setVendors] = useState<Vendor[]>(() => cachedProc?.vendors ?? []);
+  const [requests, setRequests] = useState<PurchaseRequest[]>(
+    () => cachedProc?.purchaseRequests ?? []
+  );
+  const [orders, setOrders] = useState<PurchaseOrder[]>(
+    () => cachedProc?.purchaseOrders ?? []
+  );
 
   // Modals
   const [vndOpen, setVndOpen] = useState(false);
@@ -82,7 +91,6 @@ export function ProcurementView({
   const canCreateAssets = !isReadOnly && perms.includes('assets.create');
 
   const loadProcurement = async () => {
-    setLoading(true);
     try {
       const res = await api.getProcurement();
       setVendors(res.vendors);
@@ -102,6 +110,20 @@ export function ProcurementView({
   };
 
   useEffect(() => {
+    const cached = api.peekCache<{
+      vendors: Vendor[];
+      purchaseRequests: PurchaseRequest[];
+      purchaseOrders: PurchaseOrder[];
+    }>('/api/procurement');
+    if (cached) {
+      setVendors(cached.vendors);
+      setRequests(cached.purchaseRequests);
+      setOrders(cached.purchaseOrders);
+      if (cached.vendors[0] && !poVendorId) {
+        setPoVendorId(cached.vendors[0].id);
+      }
+      setLoading(false);
+    }
     loadProcurement();
   }, [tenantCtx?.tenant.id, tenantCtx?.activeOrg.id, tenantCtx?.isAllOrgsView]);
 
@@ -264,13 +286,9 @@ export function ProcurementView({
         </div>
       </div>
 
-      {loading ? (
-        <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-10 text-center text-xs text-[var(--av-text-subtle)]">
-          Loading procurement &amp; vendor workspace...
-        </div>
-      ) : tab === 'orders' ? (
+      {tab === 'orders' ? (
         <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-[var(--av-card-shadow)] overflow-hidden">
-          {orders.length === 0 ? (
+          {orders.length === 0 && !loading ? (
             <EmptyState
               icon={ShoppingCart}
               title="No purchase orders issued"

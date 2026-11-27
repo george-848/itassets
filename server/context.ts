@@ -204,8 +204,8 @@ export function createTenantContextMiddleware(
       const readOnlyCheck = isSubscriptionReadOnly(subscription);
 
       const tenantOnlyScope: TenantScopeFilter = { tenantId: tenant.id };
-      const [tenantAssets, tenantTickets] = await Promise.all([
-        db.listAssets(tenantOnlyScope),
+      const [assetsCount, tenantTickets] = await Promise.all([
+        db.countAssets(tenantOnlyScope),
         Promise.resolve(
           state.tickets.filter((t) => t.tenantId === tenant.id)
         ),
@@ -228,7 +228,7 @@ export function createTenantContextMiddleware(
         .reduce((sum, a) => sum + (Number(a.sizeBytes) || 0), 0);
 
       const usage = buildUsageSnapshot({
-        assetsCount: tenantAssets.length,
+        assetsCount,
         usersCount: Math.max(1, tenantUsersCount),
         locationsCount: tenantLocationsCount,
         clientOrgsCount: tenantOrgs.length,

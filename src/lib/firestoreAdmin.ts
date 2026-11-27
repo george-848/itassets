@@ -3,6 +3,7 @@ import {
   deleteDoc,
   deleteField,
   doc,
+  getCountFromServer,
   getDoc,
   getDocs,
   limit,
@@ -414,16 +415,28 @@ export async function fetchFirestoreDocuments(
   }
 }
 
+export async function fetchSingleFirestoreCollectionCount(
+  collectionName: string
+): Promise<number> {
+  const colRef = resolveCollectionRef(collectionName);
+  try {
+    const agg = await getCountFromServer(colRef);
+    return agg.data().count;
+  } catch {
+    try {
+      const snap = await getDocs(query(colRef, limit(500)));
+      return snap.size;
+    } catch {
+      return 0;
+    }
+  }
+}
+
 export async function fetchFirestoreCollectionCounts(): Promise<Record<string, number>> {
   const counts: Record<string, number> = {};
   await Promise.all(
     FIRESTORE_COLLECTION_CATALOG.map(async (meta) => {
-      try {
-        const snap = await getDocs(query(collection(db, meta.name), limit(500)));
-        counts[meta.name] = snap.size;
-      } catch {
-        counts[meta.name] = 0;
-      }
+      counts[meta.name] = await fetchSingleFirestoreCollectionCount(meta.name);
     })
   );
   return counts;
@@ -538,7 +551,8 @@ function buildUpdatePayloadForKind(
       if (collectionName === 'payments') {
         const out: Record<string, unknown> = { updatedAt: serverTimestamp() };
         if (data.status !== undefined && String(data.status).trim()) {
-          out.status = String(data.status).trim().slice(0, 48);
+          const nextStatus = String(data.status).trim().slice(0, 48);
+          if (hasChanged('status', nextStatus)) out.status = nextStatus;
         }
         return { patch: out, deletedKeys };
       }
@@ -1851,81 +1865,14 @@ export async function syncSnapshotToFirestore(
   let prunedCount = 0;
   const touched = new Set<string>();
 
-  const syncSingleEntry = async (entry: SyncWriteEntry) => {
-    const path = `${entry.collection}/${entry.docId}`;
-    const docRef = doc(db, entry.collection, entry.docId);
-    const colMeta = CATALOG_MAP.get(entry.collection);
-    let existingSnapData: Record<string, unknown> | null = null;
-    let existsAlready = false;
-    try {
-      const snap = await getDoc(docRef);
-      existsAlready = snap.exists();
-      if (existsAlready) {
-        existingSnapData = serializeFirestoreValue(snap.data()) as Record<string, unknown>;
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
-    }
+  // Pre-fetch existing docs per touched collection in parallel (1 query per collection instead of 1 getDoc per doc)
+  const collectionsToPrefetch = new Set<string>();
+  for (const entry of [...foundationEntries, ...validOperationalEntries]) {
+    collectionsToPrefetch.add(entry.collection);
+  }
 
-    if (existsAlready) {
-      if (colMeta && !colMeta.canEdit) {
-        return;
-      }
-      try {
-        if (entry.kind === 'platform_config') {
-          const clean = stripUndefinedDeep(entry.rawData);
-          await setDoc(
-            docRef,
-            { ...clean, id: entry.docId, updatedAt: serverTimestamp() },
-            { merge: true }
-          );
-        } else {
-          const { patch } = buildUpdatePayloadForKind(
-            entry.kind,
-            entry.rawData,
-            uid,
-            entry.collection,
-            existingSnapData
-          );
-          await updateDoc(docRef, patch as DocumentData);
-        }
-        syncedCount++;
-        touched.add(entry.collection);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, path);
-      }
-    } else {
-      try {
-        const payload = buildCreatePayloadForKind(
-          entry.collection,
-          entry.kind,
-          entry.docId,
-          entry.rawData,
-          uid
-        );
-        await setDoc(docRef, payload as DocumentData);
-        syncedCount++;
-        touched.add(entry.collection);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, path);
-      }
-    }
-  };
-
-  const writeEntries = async (entries: SyncWriteEntry[]) => {
-    const CONCURRENCY = 10;
-    for (let i = 0; i < entries.length; i += CONCURRENCY) {
-      const slice = entries.slice(i, i + CONCURRENCY);
-      await Promise.all(slice.map((entry) => syncSingleEntry(entry)));
-    }
-  };
-
-  await writeEntries(foundationEntries);
-  await writeEntries(validOperationalEntries);
-
-  // Optional deletion reconciliation: remove stale Firestore docs no longer in snapshot
+  const expectedIdsByCollection = new Map<string, Set<string>>();
   if (options?.pruneStale) {
-    const expectedIdsByCollection = new Map<string, Set<string>>();
     for (const entry of [...foundationEntries, ...validOperationalEntries]) {
       if (only && entry.collection !== only) continue;
       let set = expectedIdsByCollection.get(entry.collection);
@@ -1936,7 +1883,6 @@ export async function syncSnapshotToFirestore(
       set.add(entry.docId);
     }
 
-    // Ensure explicitly selected empty collection also prunes leftover Firestore docs
     if (only && !expectedIdsByCollection.has(only)) {
       expectedIdsByCollection.set(only, new Set<string>());
     } else if (!only && !options?.tenantScope) {
@@ -1957,23 +1903,175 @@ export async function syncSnapshotToFirestore(
       }
     }
 
+    for (const colName of expectedIdsByCollection.keys()) {
+      const colMeta = CATALOG_MAP.get(colName);
+      if (colMeta && colMeta.canDelete && (!options?.tenantScope || colMeta.tenantScoped)) {
+        collectionsToPrefetch.add(colName);
+      }
+    }
+  }
+
+  const existingByCollection = new Map<string, Map<string, Record<string, unknown>>>();
+  await Promise.all(
+    Array.from(collectionsToPrefetch).map(async (colName) => {
+      try {
+        const rows = await fetchFirestoreDocuments(
+          colName,
+          options?.tenantScope || undefined,
+          1000
+        );
+        existingByCollection.set(
+          colName,
+          new Map(rows.map((r) => [r.docId, r.data]))
+        );
+      } catch {
+        existingByCollection.set(colName, new Map());
+      }
+    })
+  );
+
+  type PreparedOp =
+    | {
+        type: 'set';
+        collection: string;
+        docId: string;
+        payload: Record<string, unknown>;
+        merge?: boolean;
+      }
+    | {
+        type: 'update';
+        collection: string;
+        docId: string;
+        payload: Record<string, unknown>;
+      };
+
+  const commitBatchOps = async (ops: PreparedOp[]) => {
+    const BATCH_LIMIT = 400;
+    for (let i = 0; i < ops.length; i += BATCH_LIMIT) {
+      const chunk = ops.slice(i, i + BATCH_LIMIT);
+      const batch = writeBatch(db);
+      for (const op of chunk) {
+        const ref = doc(db, op.collection, op.docId);
+        if (op.type === 'set') {
+          if (op.merge) {
+            batch.set(ref, op.payload as DocumentData, { merge: true });
+          } else {
+            batch.set(ref, op.payload as DocumentData);
+          }
+        } else {
+          batch.update(ref, op.payload as DocumentData);
+        }
+      }
+      try {
+        await batch.commit();
+        for (const op of chunk) {
+          syncedCount++;
+          touched.add(op.collection);
+        }
+      } catch (error) {
+        handleFirestoreError(
+          error,
+          OperationType.WRITE,
+          chunk[0] ? `${chunk[0].collection}/${chunk[0].docId}` : 'batch'
+        );
+      }
+    }
+  };
+
+  const prepareOpsForEntries = (entries: SyncWriteEntry[]): PreparedOp[] => {
+    const ops: PreparedOp[] = [];
+    for (const entry of entries) {
+      const colMap = existingByCollection.get(entry.collection);
+      const existingSnapData = colMap?.get(entry.docId) ?? null;
+      const colMeta = CATALOG_MAP.get(entry.collection);
+
+      if (existingSnapData) {
+        if (colMeta && !colMeta.canEdit) {
+          continue;
+        }
+        if (entry.kind === 'platform_config') {
+          const clean = stripUndefinedDeep(entry.rawData);
+          const candidate = { ...clean, id: entry.docId };
+          const hasAnyDiff = Object.entries(candidate).some(
+            ([k, v]) => JSON.stringify(existingSnapData[k]) !== JSON.stringify(v)
+          );
+          if (!hasAnyDiff) continue;
+          ops.push({
+            type: 'set',
+            collection: entry.collection,
+            docId: entry.docId,
+            payload: { ...candidate, updatedAt: serverTimestamp() },
+            merge: true,
+          });
+        } else {
+          const { patch, deletedKeys } = buildUpdatePayloadForKind(
+            entry.kind,
+            entry.rawData,
+            uid,
+            entry.collection,
+            existingSnapData
+          );
+          const hasMeaningfulChange =
+            deletedKeys.length > 0 ||
+            Object.keys(patch).some((k) => k !== 'updatedAt' && k !== 'updatedBy');
+          if (!hasMeaningfulChange) continue;
+          ops.push({
+            type: 'update',
+            collection: entry.collection,
+            docId: entry.docId,
+            payload: patch,
+          });
+        }
+      } else {
+        const payload = buildCreatePayloadForKind(
+          entry.collection,
+          entry.kind,
+          entry.docId,
+          entry.rawData,
+          uid
+        );
+        ops.push({
+          type: 'set',
+          collection: entry.collection,
+          docId: entry.docId,
+          payload,
+          merge: false,
+        });
+      }
+    }
+    return ops;
+  };
+
+  // Commit Stage 1 (tenants/plans/settings/users) before Stage 2 so exists(/tenants/$(tid)) rules pass
+  await commitBatchOps(prepareOpsForEntries(foundationEntries));
+  await commitBatchOps(prepareOpsForEntries(validOperationalEntries));
+
+  // Optional deletion reconciliation: remove stale Firestore docs no longer in snapshot
+  if (options?.pruneStale) {
     for (const [colName, keepIds] of expectedIdsByCollection.entries()) {
       const colMeta = CATALOG_MAP.get(colName);
       if (!colMeta || !colMeta.canDelete) continue;
       if (options?.tenantScope && !colMeta.tenantScoped) continue;
 
-      const existingDocs = await fetchFirestoreDocuments(
-        colName,
-        options?.tenantScope || undefined,
-        500
-      );
-      const staleDocs = existingDocs.filter((d) => !keepIds.has(d.docId));
-      if (staleDocs.length > 0) {
-        for (let i = 0; i < staleDocs.length; i += 400) {
-          const chunk = staleDocs.slice(i, i + 400);
+      const existingMap = existingByCollection.get(colName);
+      const staleIds = existingMap
+        ? Array.from(existingMap.keys()).filter((id) => !keepIds.has(id))
+        : (
+            await fetchFirestoreDocuments(
+              colName,
+              options?.tenantScope || undefined,
+              500
+            )
+          )
+            .filter((d) => !keepIds.has(d.docId))
+            .map((d) => d.docId);
+
+      if (staleIds.length > 0) {
+        for (let i = 0; i < staleIds.length; i += 400) {
+          const chunk = staleIds.slice(i, i + 400);
           const batch = writeBatch(db);
-          for (const item of chunk) {
-            batch.delete(doc(db, colName, item.docId));
+          for (const docId of chunk) {
+            batch.delete(doc(db, colName, docId));
             prunedCount++;
           }
           await batch.commit();

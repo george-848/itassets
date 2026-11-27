@@ -68,7 +68,12 @@ export function IntegrationsAndAutomationView({
   const [savingWs, setSavingWs] = useState(false);
 
   // Custom Fields
-  const [customFields, setCustomFields] = useState<CustomFieldDef[]>([]);
+  const cachedCf = hasCustomFields
+    ? api.peekCache<{ fields: CustomFieldDef[] }>('/api/custom-fields')
+    : null;
+  const [customFields, setCustomFields] = useState<CustomFieldDef[]>(
+    () => cachedCf?.fields ?? []
+  );
   const [cfEntity, setCfEntity] = useState<CustomFieldDef['entityType']>('asset');
   const [cfLabel, setCfLabel] = useState('');
   const [cfType, setCfType] = useState<CustomFieldDef['fieldType']>('text');
@@ -76,13 +81,27 @@ export function IntegrationsAndAutomationView({
   const [cfRequired, setCfRequired] = useState(false);
 
   // API Keys & Webhooks
-  const [apiKeys, setApiKeys] = useState<TenantApiKey[]>([]);
+  const cachedKeys = hasApiWebhooks
+    ? api.peekCache<{ apiKeys: TenantApiKey[] }>('/api/integrations/api-keys')
+    : null;
+  const cachedWebhooks = hasApiWebhooks
+    ? api.peekCache<{ webhooks: WebhookEndpoint[]; deliveries: WebhookDelivery[] }>(
+        '/api/integrations/webhooks'
+      )
+    : null;
+  const [apiKeys, setApiKeys] = useState<TenantApiKey[]>(
+    () => cachedKeys?.apiKeys ?? []
+  );
   const [keyName, setKeyName] = useState('');
   const [newPlaintextKey, setNewPlaintextKey] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState(false);
 
-  const [webhooks, setWebhooks] = useState<WebhookEndpoint[]>([]);
-  const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([]);
+  const [webhooks, setWebhooks] = useState<WebhookEndpoint[]>(
+    () => cachedWebhooks?.webhooks ?? []
+  );
+  const [deliveries, setDeliveries] = useState<WebhookDelivery[]>(
+    () => cachedWebhooks?.deliveries ?? []
+  );
   const [whName, setWhName] = useState('');
   const [whUrl, setWhUrl] = useState('');
   const [whEvents, setWhEvents] = useState<string[]>([
@@ -94,8 +113,16 @@ export function IntegrationsAndAutomationView({
   const [newWhSecret, setNewWhSecret] = useState<string | null>(null);
 
   // Automation & Scheduled Reports
-  const [schedules, setSchedules] = useState<ScheduledReportConfig[]>([]);
-  const [outbox, setOutbox] = useState<EmailOutboxEntry[]>([]);
+  const cachedSch = api.peekCache<{
+    schedules: ScheduledReportConfig[];
+    outbox: EmailOutboxEntry[];
+  }>('/api/automation/schedules');
+  const [schedules, setSchedules] = useState<ScheduledReportConfig[]>(
+    () => cachedSch?.schedules ?? []
+  );
+  const [outbox, setOutbox] = useState<EmailOutboxEntry[]>(
+    () => cachedSch?.outbox ?? []
+  );
   const [schName, setSchName] = useState('');
   const [schReport, setSchReport] =
     useState<ScheduledReportConfig['reportType']>('inventory');

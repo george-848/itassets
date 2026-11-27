@@ -1,15 +1,18 @@
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import express from 'express';
 import QRCode from 'qrcode';
 import {
   createAuthMiddleware,
   hashPassword,
+  hashPasswordAsync,
   signMfaChallengeToken,
   signOAuthState,
   signSessionToken,
   verifyMfaChallengeToken,
   verifyOAuthState,
   verifyPassword,
+  verifyPasswordAsync,
   type AuthenticatedRequest,
 } from './auth.ts';
 import {
@@ -20,11 +23,12 @@ import {
   requireWritableSubscription,
   type TenantRequest,
 } from './context.ts';
-import { createDatabase, type ItamsDatabase } from './db.ts';
+import { buildDashboardSummary, createDatabase, type ItamsDatabase } from './db.ts';
 import { checkQuotaExceeded } from './entitlements.ts';
 import { sendTransactionalEmail } from './mailer.ts';
 import { registerSaasRoutes } from './routesSaas.ts';
 import { DEFAULT_ORG_ID, DEFAULT_TENANT_ID, SaasStore } from './saasStore.ts';
+import { evaluateTicketBreach } from './sla.ts';
 import {
   buildOtpAuthUri,
   generateBase32Secret,
@@ -105,6 +109,37 @@ export function createApiApp(
   const app = express();
   const store = providedStore ?? new SaasStore();
 
+  app.use((req, res, next) => {
+    const acceptEncoding = String(req.headers['accept-encoding'] || '');
+    if (!acceptEncoding.includes('gzip')) {
+      next();
+      return;
+    }
+    const origJson = res.json.bind(res);
+    res.json = ((body: unknown) => {
+      if (res.headersSent) {
+        return origJson(body);
+      }
+      const jsonStr = JSON.stringify(body);
+      if (Buffer.byteLength(jsonStr, 'utf8') < 1024) {
+        return origJson(body);
+      }
+      zlib.gzip(jsonStr, { level: zlib.constants.Z_BEST_SPEED }, (err, compressed) => {
+        if (err || res.headersSent) {
+          origJson(body);
+          return;
+        }
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Vary', 'Accept-Encoding');
+        res.removeHeader('Content-Length');
+        res.send(compressed);
+      });
+      return res;
+    }) as typeof res.json;
+    next();
+  });
+
   app.use(
     express.json({
       limit: '8mb',
@@ -147,7 +182,7 @@ export function createApiApp(
       }
 
       const user = await db.findUserByEmail(email);
-      if (!user || !verifyPassword(password, user.password_hash)) {
+      if (!user || !(await verifyPasswordAsync(password, user.password_hash))) {
         res.status(401).json({ error: 'Invalid email address or password.' });
         return;
       }
@@ -177,7 +212,7 @@ export function createApiApp(
       }
 
       const now = new Date().toISOString();
-      await db.updateUserLastLogin(user.id, now);
+      void db.updateUserLastLogin(user.id, now).catch(() => {});
       const token = signSessionToken({ id: user.id, email: user.email, role: user.role });
 
       res.cookie('av_session', token, {
@@ -237,7 +272,7 @@ export function createApiApp(
       }
 
       const now = new Date().toISOString();
-      await db.updateUserLastLogin(user.id, now);
+      void db.updateUserLastLogin(user.id, now).catch(() => {});
       const token = signSessionToken({ id: user.id, email: user.email, role: user.role });
 
       res.cookie('av_session', token, {
@@ -270,11 +305,12 @@ export function createApiApp(
     const existingUser = await db.findUserByEmail(params.email);
 
     if (!existingUser) {
+      const randomSecret = await hashPasswordAsync(crypto.randomBytes(24).toString('hex'));
       const createdUser = await db.createUser({
         id: `usr-${crypto.randomUUID().slice(0, 8)}`,
         name: params.displayName,
         email: params.email,
-        password_hash: hashPassword(crypto.randomBytes(24).toString('hex')),
+        password_hash: randomSecret,
         role: 'staff',
         department: 'IT Infrastructure',
         status: 'pending',
@@ -314,7 +350,7 @@ export function createApiApp(
       };
     }
 
-    await db.updateUserLastLogin(existingUser.id, now);
+    void db.updateUserLastLogin(existingUser.id, now).catch(() => {});
     const { password_hash: _ignored, ...rest } = existingUser;
     const safeUser = { ...rest, last_login: now };
     const token = signSessionToken({
@@ -346,10 +382,12 @@ export function createApiApp(
 
       const [tokeninfoRes, userinfoRes] = await Promise.all([
         fetch(
-          `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(googleToken)}`
+          `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(googleToken)}`,
+          { signal: AbortSignal.timeout(6000) }
         ),
         fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
           headers: { Authorization: `Bearer ${googleToken}` },
+          signal: AbortSignal.timeout(6000),
         }),
       ]);
 
@@ -599,6 +637,7 @@ export function createApiApp(
           code,
           redirect_uri: statePayload.redirectUri,
         }),
+        signal: AbortSignal.timeout(6000),
       });
 
       const tokenData = (await tokenRes.json()) as {
@@ -626,8 +665,14 @@ export function createApiApp(
       };
 
       const [ghUserRes, ghEmailsRes] = await Promise.all([
-        fetch('https://api.github.com/user', { headers: ghHeaders }),
-        fetch('https://api.github.com/user/emails', { headers: ghHeaders }),
+        fetch('https://api.github.com/user', {
+          headers: ghHeaders,
+          signal: AbortSignal.timeout(6000),
+        }),
+        fetch('https://api.github.com/user/emails', {
+          headers: ghHeaders,
+          signal: AbortSignal.timeout(6000),
+        }),
       ]);
 
       if (!ghUserRes.ok || !ghEmailsRes.ok) {
@@ -762,11 +807,12 @@ export function createApiApp(
         Date.now() + trialDays * 24 * 60 * 60 * 1000
       ).toISOString();
 
+      const passwordHash = await hashPasswordAsync(password);
       const newUser = await db.createUser({
         id: `usr-${crypto.randomUUID().slice(0, 8)}`,
         name,
         email,
-        password_hash: hashPassword(password),
+        password_hash: passwordHash,
         role: 'admin',
         department: 'IT Infrastructure',
         status: 'active',
@@ -936,7 +982,8 @@ export function createApiApp(
       res.status(400).json({ error: 'Reset token is invalid or expired.' });
       return;
     }
-    await db.updateUser(entry.userId, { password_hash: hashPassword(newPassword) });
+    const newHash = await hashPasswordAsync(newPassword);
+    await db.updateUser(entry.userId, { password_hash: newHash });
     await store.mutate((s) => {
       s.passwordResetTokens = s.passwordResetTokens.filter((t) => t.token !== token);
     });
@@ -1041,6 +1088,273 @@ export function createApiApp(
       res: express.Response,
       next: () => void
     ) => void,
+  });
+
+  // -------------------------------------------------------------------------
+  // Unified Workspace Bootstrap (1 round-trip for user + context + initial data)
+  // -------------------------------------------------------------------------
+  app.get('/api/bootstrap', ...tenantGuard, async (req: TenantRequest, res) => {
+    try {
+      const user = req.authUser!;
+      const ctx = req.tenantCtx!;
+      const perms = new Set(ctx.permissions);
+      const features = new Set(ctx.effectiveFeatures);
+      const isSuper = ctx.isSuperAdmin;
+
+      const canDash = isSuper || perms.has('dashboard.read');
+      const canAssets = isSuper || perms.has('assets.read') || canDash;
+      const canEmployees = isSuper || perms.has('employees.read') || canDash;
+      const canAssignments = isSuper || perms.has('assignments.read') || canDash;
+      const canMaint = isSuper || perms.has('maintenance.read') || canDash;
+      const canUsers = isSuper || perms.has('users.read') || user.role === 'admin';
+      const canTickets = (isSuper || perms.has('tickets.read')) && features.has('helpdesk');
+      const canLicences =
+        (isSuper || perms.has('licences.read')) && features.has('software_licences');
+      const canProcurement =
+        (isSuper || perms.has('procurement.read')) && features.has('procurement');
+
+      const [
+        rawAssets,
+        employees,
+        assignments,
+        maintenanceLogs,
+        allUsers,
+        dbNotifications,
+      ] = await Promise.all([
+        canAssets ? db.listAssets(ctx.scopeFilter) : Promise.resolve([]),
+        canEmployees ? db.listEmployees(ctx.scopeFilter) : Promise.resolve([]),
+        canAssignments ? db.listAssignments(ctx.scopeFilter) : Promise.resolve([]),
+        canMaint ? db.listMaintenanceLogs(ctx.scopeFilter) : Promise.resolve([]),
+        canUsers ? db.listUsers() : Promise.resolve([]),
+        db.listNotifications(user.id, ctx.scopeFilter),
+      ]);
+
+      const orgNameMap = new Map(
+        store.data.clientOrganisations.map((o) => [o.id, o.name])
+      );
+      const enrichedAssets = rawAssets.map((a) => {
+        const meta = store.data.assetMeta[a.id];
+        return {
+          ...a,
+          org_name: orgNameMap.get(a.org_id || DEFAULT_ORG_ID) || 'Main Corporate HQ',
+          barcode_value: meta?.barcode_value || a.asset_tag,
+          qr_payload:
+            meta?.qr_payload ||
+            JSON.stringify({
+              id: a.id,
+              tag: a.asset_tag,
+              serial: a.serial_number,
+              tenant: a.tenant_id || DEFAULT_TENANT_ID,
+            }),
+          ...meta,
+        };
+      });
+
+      // Assemble scoped notifications identically to /api/notifications without re-querying DB
+      const ackedMap = new Map(
+        dbNotifications.filter((n) => n.acknowledged).map((n) => [n.id, n.acknowledged_at])
+      );
+      const ackPrefix = `ack:${user.id}:`;
+      for (const h of store.data.alertJobHistory) {
+        if (h.key.startsWith(ackPrefix)) {
+          ackedMap.set(h.key.slice(ackPrefix.length), h.triggeredAt);
+        }
+      }
+      const extraNotifs: typeof dbNotifications = [];
+      const todayMs = Date.now();
+      const dayMs = 86400_000;
+      const scopedTicketsAll = store.data.tickets.filter((t) =>
+        canAccessRecordOrg(ctx, t.tenantId, t.orgId)
+      );
+      for (const t of scopedTicketsAll) {
+        if (t.status === 'Resolved' || t.status === 'Closed') continue;
+        if (t.slaBreached) {
+          const key = `sla:${t.id}`;
+          extraNotifs.push({
+            id: key,
+            type: 'sla_breach',
+            severity: 'critical',
+            title: `SLA Breached: ${t.ticketNumber}`,
+            description: `${t.subject} (${t.priority}) has breached its resolution SLA target.`,
+            entity_type: 'ticket',
+            entity_id: t.id,
+            asset_id: t.assetId || '',
+            asset_tag: t.ticketNumber,
+            asset_name: t.subject,
+            due_date: (t.resolutionDueAt || t.createdAt).slice(0, 10),
+            acknowledged: ackedMap.has(key),
+            acknowledged_at: ackedMap.get(key) ?? null,
+          });
+        }
+      }
+      const scopedLicencesAll = store.data.softwareLicences.filter((l) =>
+        canAccessRecordOrg(ctx, l.tenantId, l.orgId)
+      );
+      for (const lic of scopedLicencesAll) {
+        if (!lic.expiryDate) continue;
+        const diffDays = Math.ceil(
+          (new Date(`${lic.expiryDate}T00:00:00`).getTime() - todayMs) / dayMs
+        );
+        if (diffDays <= 30) {
+          const key = `licence:${lic.id}:${lic.expiryDate}`;
+          extraNotifs.push({
+            id: key,
+            type: 'licence_expiry',
+            severity: diffDays < 0 || diffDays <= 7 ? 'critical' : 'warning',
+            title:
+              diffDays < 0
+                ? `Licence Expired: ${lic.softwareName}`
+                : `Licence Expiring in ${diffDays}d: ${lic.softwareName}`,
+            description: `${lic.vendor} (${lic.assignedSeats}/${lic.totalSeats} seats) renewal date ${lic.expiryDate}.`,
+            entity_type: 'licence',
+            entity_id: lic.id,
+            asset_id: '',
+            asset_tag: lic.licenceType,
+            asset_name: lic.softwareName,
+            due_date: lic.expiryDate,
+            acknowledged: ackedMap.has(key),
+            acknowledged_at: ackedMap.get(key) ?? null,
+          });
+        }
+      }
+      if (ctx.isReadOnlyGraceOrExpired || ctx.subscription.status === 'grace_period') {
+        const key = `sub:${ctx.subscription.id}:${ctx.subscription.status}`;
+        extraNotifs.push({
+          id: key,
+          type: 'subscription_alert',
+          severity: 'critical',
+          title: `Subscription ${ctx.subscription.status.replace('_', ' ')}`,
+          description:
+            'Renew your GH₵ workspace subscription in Subscription & Billing to maintain uninterrupted write access.',
+          entity_type: 'subscription',
+          entity_id: ctx.subscription.id,
+          asset_id: '',
+          asset_tag: ctx.plan.name,
+          asset_name: ctx.tenant.name,
+          due_date: ctx.subscription.currentPeriodEnd.slice(0, 10),
+          acknowledged: ackedMap.has(key),
+          acknowledged_at: ackedMap.get(key) ?? null,
+        });
+      }
+      const notifications = [...extraNotifs, ...dbNotifications];
+
+      let dashboard = null;
+      if (canDash) {
+        dashboard = buildDashboardSummary(
+          rawAssets,
+          employees,
+          assignments,
+          maintenanceLogs,
+          dbNotifications
+        );
+        const scopedContracts = store.data.contracts.filter((c) =>
+          canAccessRecordOrg(ctx, c.tenantId, c.orgId)
+        );
+        dashboard.counts.openTickets = scopedTicketsAll.filter(
+          (t) => t.status !== 'Resolved' && t.status !== 'Closed'
+        ).length;
+        dashboard.counts.slaBreachedTickets = scopedTicketsAll.filter(
+          (t) => t.slaBreached && t.status !== 'Resolved' && t.status !== 'Closed'
+        ).length;
+        dashboard.counts.activeLicences = scopedLicencesAll.filter(
+          (l) => l.status !== 'Expired'
+        ).length;
+        dashboard.counts.activeContracts = scopedContracts.filter(
+          (c) => c.status !== 'Expired'
+        ).length;
+        dashboard.financials.annualLicenceSpend = scopedLicencesAll.reduce(
+          (sum, l) => sum + Number(l.costPerYearGhs || 0),
+          0
+        );
+      }
+
+      const memberships = store.data.memberships.filter((m) => m.tenantId === ctx.tenant.id);
+      const membershipMap = new Map(memberships.map((m) => [m.userId, m]));
+      const users = canUsers
+        ? allUsers
+            .filter((u) => membershipMap.has(u.id))
+            .map((u) => {
+              const m = membershipMap.get(u.id)!;
+              return {
+                ...u,
+                tenant_role: m.role,
+                org_access_mode: m.orgAccessMode,
+                allowed_org_ids: m.allowedOrgIds,
+                membership_status: m.status,
+              };
+            })
+        : [];
+
+      let tickets: typeof scopedTicketsAll = [];
+      if (canTickets) {
+        const evaluated = scopedTicketsAll.map((t) => {
+          const check = evaluateTicketBreach(t);
+          return {
+            ...t,
+            slaBreached: t.slaBreached || check.breached,
+            orgName: orgNameMap.get(t.orgId) || 'Primary Org',
+          };
+        });
+        const canViewAll =
+          ctx.permissions.includes('tickets.assign') ||
+          ctx.permissions.includes('tickets.resolve');
+        tickets = canViewAll
+          ? evaluated
+          : evaluated.filter((t) => t.requesterId === user.id);
+      }
+
+      const maskKey = (k: string) => {
+        const clean = k.trim();
+        if (clean.length <= 6) return '••••••';
+        return `${clean.slice(0, 4)}-${'•'.repeat(Math.min(10, clean.length - 8))}-${clean.slice(-4)}`;
+      };
+      const canViewKeys = ctx.permissions.includes('licences.view_keys');
+      const licences = canLicences
+        ? scopedLicencesAll.map((l) => ({
+            ...l,
+            licenceKey: canViewKeys ? l.licenceKey : maskKey(l.licenceKey),
+            maskedKey: maskKey(l.licenceKey),
+          }))
+        : [];
+
+      const purchaseOrders = canProcurement
+        ? store.data.purchaseOrders.filter((p) => canAccessRecordOrg(ctx, p.tenantId, p.orgId))
+        : [];
+
+      res.json({
+        user,
+        engine: db.engine,
+        context: {
+          tenant: ctx.tenant,
+          activeOrg: ctx.activeOrg,
+          availableOrgs: ctx.availableOrgs,
+          availableTenants: ctx.availableTenants,
+          membership: ctx.membership,
+          permissions: ctx.permissions,
+          subscription: ctx.subscription,
+          plan: ctx.plan,
+          effectiveLimits: ctx.effectiveLimits,
+          effectiveFeatures: ctx.effectiveFeatures,
+          usage: ctx.usage,
+          isReadOnlyGraceOrExpired: ctx.isReadOnlyGraceOrExpired,
+          isAllOrgsView: ctx.isAllOrgsView,
+          isSuperAdmin: ctx.isSuperAdmin,
+        },
+        dashboard,
+        assets: isSuper || perms.has('assets.read') ? enrichedAssets : [],
+        employees: isSuper || perms.has('employees.read') ? employees : [],
+        assignments: isSuper || perms.has('assignments.read') ? assignments : [],
+        maintenanceLogs: isSuper || perms.has('maintenance.read') ? maintenanceLogs : [],
+        notifications,
+        users,
+        tickets,
+        licences,
+        purchaseOrders,
+      });
+    } catch (err) {
+      console.error('Bootstrap error:', err);
+      res.status(500).json({ error: 'Failed to synchronize workspace data.' });
+    }
   });
 
   // -------------------------------------------------------------------------

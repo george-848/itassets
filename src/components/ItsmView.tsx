@@ -43,12 +43,29 @@ function isBlockedErr(err: unknown): err is ApiError {
 
 export function ItsmView({ tenantCtx, onToast, onPlanBlocked }: ItsmViewProps) {
   const [tab, setTab] = useState<ItsmTab>('incidents');
-  const [loading, setLoading] = useState(true);
-  const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [problems, setProblems] = useState<ProblemRecord[]>([]);
-  const [changes, setChanges] = useState<ChangeRequest[]>([]);
-  const [catalogue, setCatalogue] = useState<ServiceCatalogueItem[]>([]);
-  const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
+  const cachedItsm = api.peekCache<{
+    incidents: Incident[];
+    problems: ProblemRecord[];
+    changes: ChangeRequest[];
+    catalogue: ServiceCatalogueItem[];
+    serviceRequests: ServiceRequest[];
+  }>('/api/itsm');
+  const [loading, setLoading] = useState(!cachedItsm);
+  const [incidents, setIncidents] = useState<Incident[]>(
+    () => cachedItsm?.incidents ?? []
+  );
+  const [problems, setProblems] = useState<ProblemRecord[]>(
+    () => cachedItsm?.problems ?? []
+  );
+  const [changes, setChanges] = useState<ChangeRequest[]>(
+    () => cachedItsm?.changes ?? []
+  );
+  const [catalogue, setCatalogue] = useState<ServiceCatalogueItem[]>(
+    () => cachedItsm?.catalogue ?? []
+  );
+  const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>(
+    () => cachedItsm?.serviceRequests ?? []
+  );
 
   // Modal state
   const [incOpen, setIncOpen] = useState(false);
@@ -81,7 +98,6 @@ export function ItsmView({ tenantCtx, onToast, onPlanBlocked }: ItsmViewProps) {
   const canRequestService = !isReadOnly && perms.includes('tickets.create');
 
   const loadItsm = async () => {
-    setLoading(true);
     try {
       const res = await api.getItsm();
       setIncidents(res.incidents);
@@ -100,6 +116,21 @@ export function ItsmView({ tenantCtx, onToast, onPlanBlocked }: ItsmViewProps) {
   };
 
   useEffect(() => {
+    const cached = api.peekCache<{
+      incidents: Incident[];
+      problems: ProblemRecord[];
+      changes: ChangeRequest[];
+      catalogue: ServiceCatalogueItem[];
+      serviceRequests: ServiceRequest[];
+    }>('/api/itsm');
+    if (cached) {
+      setIncidents(cached.incidents);
+      setProblems(cached.problems);
+      setChanges(cached.changes);
+      setCatalogue(cached.catalogue);
+      setServiceRequests(cached.serviceRequests);
+      setLoading(false);
+    }
     loadItsm();
   }, [tenantCtx?.tenant.id, tenantCtx?.activeOrg.id, tenantCtx?.isAllOrgsView]);
 
@@ -280,13 +311,9 @@ export function ItsmView({ tenantCtx, onToast, onPlanBlocked }: ItsmViewProps) {
       </div>
 
       {/* Content */}
-      {loading ? (
-        <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] p-10 text-center text-xs text-[var(--av-text-subtle)]">
-          Loading ITIL Service Management workspace...
-        </div>
-      ) : tab === 'incidents' ? (
+      {tab === 'incidents' ? (
         <div className="rounded-xl border border-[var(--av-border)] bg-[var(--av-surface)] shadow-[var(--av-card-shadow)] overflow-hidden">
-          {incidents.length === 0 ? (
+          {incidents.length === 0 && !loading ? (
             <EmptyState
               icon={AlertOctagon}
               title="No major incidents recorded"

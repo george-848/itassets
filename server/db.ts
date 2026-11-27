@@ -66,6 +66,7 @@ export interface ItamsDatabase {
   deleteEmployee(id: string): Promise<boolean>;
 
   // Assets
+  countAssets(scope?: TenantScopeFilter): Promise<number>;
   listAssets(scope?: TenantScopeFilter): Promise<Asset[]>;
   getAssetById(id: string): Promise<Asset | null>;
   createAsset(asset: Asset): Promise<Asset>;
@@ -442,6 +443,42 @@ function nextHandoverNumber(existing: AssetAssignment[]): string {
   return `HO-${year}-${String(maxSeq + 1).padStart(4, '0')}`;
 }
 
+function buildMongoScopeQuery(
+  scope?: TenantScopeFilter,
+  extra: Record<string, unknown> = {}
+): Record<string, unknown> {
+  if (!scope) return extra;
+  const clauses: Array<Record<string, unknown>> = [];
+  if (Object.keys(extra).length > 0) {
+    clauses.push(extra);
+  }
+  if (scope.tenantId === 'ten-default-01') {
+    clauses.push({
+      $or: [{ tenant_id: 'ten-default-01' }, { tenant_id: { $exists: false } }],
+    });
+  } else {
+    clauses.push({ tenant_id: scope.tenantId });
+  }
+  if (scope.orgIds) {
+    if (scope.orgIds.includes('org-default-01')) {
+      clauses.push({
+        $or: [{ org_id: { $in: scope.orgIds } }, { org_id: { $exists: false } }],
+      });
+    } else {
+      clauses.push({ org_id: { $in: scope.orgIds } });
+    }
+  }
+  return clauses.length === 1 ? clauses[0] : { $and: clauses };
+}
+
+function buildMongoTenantQuery(
+  tenantId?: string,
+  extra: Record<string, unknown> = {}
+): Record<string, unknown> {
+  if (!tenantId) return extra;
+  return buildMongoScopeQuery({ tenantId }, extra);
+}
+
 // ============================================================================
 // MongoDB Atlas Implementation
 // ============================================================================
@@ -450,11 +487,14 @@ class MongoItamsDatabase implements ItamsDatabase {
   private client: MongoClient;
   private db!: Db;
   private dbName: string;
+  private userCache = new Map<string, { user: User | null; expiresAt: number }>();
+  private static readonly USER_CACHE_TTL_MS = 10_000;
 
   constructor(uri: string, dbName: string) {
     this.client = new MongoClient(uri, {
       serverSelectionTimeoutMS: 8000,
       connectTimeoutMS: 8000,
+      maxPoolSize: 20,
       family: 4,
     });
     this.dbName = dbName;
@@ -493,11 +533,23 @@ class MongoItamsDatabase implements ItamsDatabase {
       this.db.collection('employees').createIndex({ id: 1 }, { unique: true }),
       this.db
         .collection('employees')
+        .createIndex({ tenant_id: 1, org_id: 1 }),
+      this.db
+        .collection('employees')
         .createIndex({ tenant_id: 1, employee_code: 1 }, { unique: true }),
       this.db
         .collection('employees')
         .createIndex({ tenant_id: 1, email: 1 }, { unique: true }),
       this.db.collection('assets').createIndex({ id: 1 }, { unique: true }),
+      this.db
+        .collection('assets')
+        .createIndex({ tenant_id: 1, org_id: 1, created_at: -1 }),
+      this.db
+        .collection('assets')
+        .createIndex({ tenant_id: 1, status: 1 }),
+      this.db
+        .collection('assets')
+        .createIndex({ assigned_employee_id: 1, status: 1 }),
       this.db
         .collection('assets')
         .createIndex({ tenant_id: 1, asset_tag: 1 }, { unique: true }),
@@ -507,8 +559,18 @@ class MongoItamsDatabase implements ItamsDatabase {
       this.db.collection('assignments').createIndex({ id: 1 }, { unique: true }),
       this.db
         .collection('assignments')
+        .createIndex({ tenant_id: 1, org_id: 1, created_at: -1 }),
+      this.db.collection('assignments').createIndex({ asset_id: 1 }),
+      this.db.collection('assignments').createIndex({ employee_id: 1 }),
+      this.db
+        .collection('assignments')
         .createIndex({ tenant_id: 1, handover_number: 1 }, { unique: true }),
       this.db.collection('maintenance_logs').createIndex({ id: 1 }, { unique: true }),
+      this.db
+        .collection('maintenance_logs')
+        .createIndex({ tenant_id: 1, org_id: 1, service_date: -1 }),
+      this.db.collection('maintenance_logs').createIndex({ asset_id: 1 }),
+      this.db.collection('notification_acks').createIndex({ user_id: 1 }),
       this.db
         .collection('notification_acks')
         .createIndex({ alert_key: 1, user_id: 1 }, { unique: true }),
@@ -584,13 +646,26 @@ class MongoItamsDatabase implements ItamsDatabase {
   }
 
   async findUserById(id: string): Promise<User | null> {
+    const cached = this.userCache.get(id);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.user;
+    }
     const doc = await this.db
       .collection<StoredUser>('users')
       .findOne({ id }, { projection: { _id: 0 } });
-    return doc ? stripPassword(doc) : null;
+    const safe = doc ? stripPassword(doc) : null;
+    this.userCache.set(id, {
+      user: safe,
+      expiresAt: Date.now() + MongoItamsDatabase.USER_CACHE_TTL_MS,
+    });
+    return safe;
   }
 
   async updateUserLastLogin(id: string, isoTimestamp: string): Promise<void> {
+    const cached = this.userCache.get(id);
+    if (cached?.user) {
+      cached.user = { ...cached.user, last_login: isoTimestamp };
+    }
     await this.db
       .collection('users')
       .updateOne({ id }, { $set: { last_login: isoTimestamp } });
@@ -599,15 +674,20 @@ class MongoItamsDatabase implements ItamsDatabase {
   async listUsers(): Promise<User[]> {
     const docs = await this.db
       .collection<StoredUser>('users')
-      .find({}, { projection: { _id: 0 } })
+      .find({}, { projection: { _id: 0, password_hash: 0 } })
       .sort({ created_at: 1 })
       .toArray();
-    return docs.map(stripPassword);
+    return docs.map((d) => stripPassword(d as StoredUser));
   }
 
   async createUser(user: StoredUser): Promise<User> {
     await this.db.collection<StoredUser>('users').insertOne({ ...user });
-    return stripPassword(user);
+    const safe = stripPassword(user);
+    this.userCache.set(user.id, {
+      user: safe,
+      expiresAt: Date.now() + MongoItamsDatabase.USER_CACHE_TTL_MS,
+    });
+    return safe;
   }
 
   async updateUser(
@@ -627,46 +707,50 @@ class MongoItamsDatabase implements ItamsDatabase {
       >
     >
   ): Promise<User | null> {
+    this.userCache.delete(id);
     await this.db.collection('users').updateOne({ id }, { $set: patch });
     return this.findUserById(id);
   }
 
   async deleteUser(id: string): Promise<boolean> {
+    this.userCache.delete(id);
     const res = await this.db.collection('users').deleteOne({ id });
     return res.deletedCount > 0;
   }
 
   async listEmployees(scope?: TenantScopeFilter): Promise<Employee[]> {
+    const query = buildMongoScopeQuery(scope);
+    const assetQuery = buildMongoScopeQuery(scope, { status: 'Assigned' });
     const [employees, assets] = await Promise.all([
       this.db
         .collection<Employee>('employees')
-        .find({}, { projection: { _id: 0 } })
+        .find(query, { projection: { _id: 0 } })
         .sort({ full_name: 1 })
         .toArray(),
       this.db
         .collection<Asset>('assets')
-        .find({ status: 'Assigned' }, { projection: { _id: 0, assigned_employee_id: 1, tenant_id: 1, org_id: 1 } })
+        .find(assetQuery, { projection: { _id: 0, assigned_employee_id: 1 } })
         .toArray(),
     ]);
-    const scopedEmployees = employees.filter((e) => matchesScope(e, scope));
     const counts = new Map<string, number>();
     for (const a of assets) {
-      if (!matchesScope(a, scope)) continue;
       if (a.assigned_employee_id) {
         counts.set(a.assigned_employee_id, (counts.get(a.assigned_employee_id) ?? 0) + 1);
       }
     }
-    return scopedEmployees.map((e) => ({ ...e, assigned_count: counts.get(e.id) ?? 0 }));
+    return employees.map((e) => ({ ...e, assigned_count: counts.get(e.id) ?? 0 }));
   }
 
   async getEmployeeById(id: string): Promise<Employee | null> {
-    const emp = await this.db
-      .collection<Employee>('employees')
-      .findOne({ id }, { projection: { _id: 0 } });
+    const [emp, assignedCount] = await Promise.all([
+      this.db
+        .collection<Employee>('employees')
+        .findOne({ id }, { projection: { _id: 0 } }),
+      this.db
+        .collection('assets')
+        .countDocuments({ assigned_employee_id: id, status: 'Assigned' }),
+    ]);
     if (!emp) return null;
-    const assignedCount = await this.db
-      .collection('assets')
-      .countDocuments({ assigned_employee_id: id, status: 'Assigned' });
     return { ...emp, assigned_count: assignedCount };
   }
 
@@ -690,20 +774,25 @@ class MongoItamsDatabase implements ItamsDatabase {
     return res.deletedCount > 0;
   }
 
+  async countAssets(scope?: TenantScopeFilter): Promise<number> {
+    return this.db.collection<Asset>('assets').countDocuments(buildMongoScopeQuery(scope));
+  }
+
   async listAssets(scope?: TenantScopeFilter): Promise<Asset[]> {
+    const assetQuery = buildMongoScopeQuery(scope);
+    const empQuery = buildMongoTenantQuery(scope?.tenantId);
     const [assets, employees] = await Promise.all([
       this.db
         .collection<Asset>('assets')
-        .find({}, { projection: { _id: 0 } })
+        .find(assetQuery, { projection: { _id: 0 } })
         .sort({ created_at: -1 })
         .toArray(),
       this.db
         .collection<Employee>('employees')
-        .find({}, { projection: { _id: 0 } })
+        .find(empQuery, { projection: { _id: 0, id: 1, full_name: 1, department: 1, employee_code: 1 } })
         .toArray(),
     ]);
-    const scopedAssets = assets.filter((a) => matchesScope(a, scope));
-    return enrichAssets(scopedAssets, employees);
+    return enrichAssets(assets, employees);
   }
 
   async getAssetById(id: string): Promise<Asset | null> {
@@ -711,11 +800,16 @@ class MongoItamsDatabase implements ItamsDatabase {
       .collection<Asset>('assets')
       .findOne({ id }, { projection: { _id: 0 } });
     if (!asset) return null;
-    const employees = await this.db
+    if (!asset.assigned_employee_id) {
+      return enrichAssets([asset], [])[0] ?? null;
+    }
+    const emp = await this.db
       .collection<Employee>('employees')
-      .find({}, { projection: { _id: 0 } })
-      .toArray();
-    return enrichAssets([asset], employees)[0] ?? null;
+      .findOne(
+        { id: asset.assigned_employee_id },
+        { projection: { _id: 0, id: 1, full_name: 1, department: 1, employee_code: 1 } }
+      );
+    return enrichAssets([asset], emp ? [emp] : [])[0] ?? null;
   }
 
   async createAsset(asset: Asset): Promise<Asset> {
@@ -745,34 +839,88 @@ class MongoItamsDatabase implements ItamsDatabase {
     return false;
   }
 
+  private async enrichAssignmentRows(assignments: AssetAssignment[]): Promise<AssetAssignment[]> {
+    if (assignments.length === 0) return [];
+    const assetIds = Array.from(new Set(assignments.map((a) => a.asset_id)));
+    const employeeIds = Array.from(new Set(assignments.map((a) => a.employee_id)));
+    const userIds = Array.from(new Set(assignments.map((a) => a.assigned_by_user_id)));
+    const [assets, employees, users] = await Promise.all([
+      this.db
+        .collection<Asset>('assets')
+        .find(
+          { id: { $in: assetIds } },
+          { projection: { _id: 0, id: 1, asset_tag: 1, name: 1, category: 1, brand: 1, model: 1, serial_number: 1 } }
+        )
+        .toArray(),
+      this.db
+        .collection<Employee>('employees')
+        .find(
+          { id: { $in: employeeIds } },
+          { projection: { _id: 0, id: 1, full_name: 1, employee_code: 1, department: 1, email: 1 } }
+        )
+        .toArray(),
+      this.db
+        .collection<StoredUser>('users')
+        .find({ id: { $in: userIds } }, { projection: { _id: 0, id: 1, name: 1 } })
+        .toArray(),
+    ]);
+    return enrichAssignments(assignments, assets, employees, users);
+  }
+
   async listAssignments(scope?: TenantScopeFilter): Promise<AssetAssignment[]> {
+    const asgQuery = buildMongoScopeQuery(scope);
+    const tenantQuery = buildMongoTenantQuery(scope?.tenantId);
     const [assignments, assets, employees, users] = await Promise.all([
       this.db
         .collection<AssetAssignment>('assignments')
-        .find({}, { projection: { _id: 0 } })
+        .find(asgQuery, { projection: { _id: 0 } })
         .sort({ created_at: -1 })
         .toArray(),
-      this.db.collection<Asset>('assets').find({}, { projection: { _id: 0 } }).toArray(),
-      this.db.collection<Employee>('employees').find({}, { projection: { _id: 0 } }).toArray(),
-      this.db.collection<StoredUser>('users').find({}, { projection: { _id: 0 } }).toArray(),
+      this.db
+        .collection<Asset>('assets')
+        .find(tenantQuery, {
+          projection: { _id: 0, id: 1, asset_tag: 1, name: 1, category: 1, brand: 1, model: 1, serial_number: 1 },
+        })
+        .toArray(),
+      this.db
+        .collection<Employee>('employees')
+        .find(tenantQuery, {
+          projection: { _id: 0, id: 1, full_name: 1, employee_code: 1, department: 1, email: 1 },
+        })
+        .toArray(),
+      this.db
+        .collection<StoredUser>('users')
+        .find({}, { projection: { _id: 0, id: 1, name: 1 } })
+        .toArray(),
     ]);
-    const scopedAssignments = assignments.filter((a) => matchesScope(a, scope));
-    return enrichAssignments(scopedAssignments, assets, employees, users);
+    return enrichAssignments(assignments, assets, employees, users);
   }
 
   async listAssignmentsByAsset(assetId: string): Promise<AssetAssignment[]> {
-    const all = await this.listAssignments();
-    return all.filter((a) => a.asset_id === assetId);
+    const rows = await this.db
+      .collection<AssetAssignment>('assignments')
+      .find({ asset_id: assetId }, { projection: { _id: 0 } })
+      .sort({ created_at: -1 })
+      .toArray();
+    return this.enrichAssignmentRows(rows);
   }
 
   async listAssignmentsByEmployee(employeeId: string): Promise<AssetAssignment[]> {
-    const all = await this.listAssignments();
-    return all.filter((a) => a.employee_id === employeeId);
+    const rows = await this.db
+      .collection<AssetAssignment>('assignments')
+      .find({ employee_id: employeeId }, { projection: { _id: 0 } })
+      .sort({ created_at: -1 })
+      .toArray();
+    return this.enrichAssignmentRows(rows);
   }
 
   async getAssignmentById(id: string): Promise<AssetAssignment | null> {
-    const all = await this.listAssignments();
-    return all.find((a) => a.id === id) ?? null;
+    const row = await this.db
+      .collection<AssetAssignment>('assignments')
+      .findOne({ id }, { projection: { _id: 0 } });
+    if (!row) return null;
+    const enriched = await this.enrichAssignmentRows([row]);
+    return enriched[0] ?? null;
   }
 
   async assignAsset(params: {
@@ -918,28 +1066,65 @@ class MongoItamsDatabase implements ItamsDatabase {
     return res.deletedCount > 0;
   }
 
+  private async enrichMaintenanceRows(logs: MaintenanceLog[]): Promise<MaintenanceLog[]> {
+    if (logs.length === 0) return [];
+    const assetIds = Array.from(new Set(logs.map((m) => m.asset_id)));
+    const userIds = Array.from(new Set(logs.map((m) => m.recorded_by_user_id)));
+    const [assets, users] = await Promise.all([
+      this.db
+        .collection<Asset>('assets')
+        .find(
+          { id: { $in: assetIds } },
+          { projection: { _id: 0, id: 1, asset_tag: 1, name: 1, category: 1, brand: 1, model: 1 } }
+        )
+        .toArray(),
+      this.db
+        .collection<StoredUser>('users')
+        .find({ id: { $in: userIds } }, { projection: { _id: 0, id: 1, name: 1 } })
+        .toArray(),
+    ]);
+    return enrichMaintenance(logs, assets, users);
+  }
+
   async listMaintenanceLogs(scope?: TenantScopeFilter): Promise<MaintenanceLog[]> {
+    const logQuery = buildMongoScopeQuery(scope);
+    const assetQuery = buildMongoTenantQuery(scope?.tenantId);
     const [logs, assets, users] = await Promise.all([
       this.db
         .collection<MaintenanceLog>('maintenance_logs')
-        .find({}, { projection: { _id: 0 } })
+        .find(logQuery, { projection: { _id: 0 } })
         .sort({ service_date: -1, created_at: -1 })
         .toArray(),
-      this.db.collection<Asset>('assets').find({}, { projection: { _id: 0 } }).toArray(),
-      this.db.collection<StoredUser>('users').find({}, { projection: { _id: 0 } }).toArray(),
+      this.db
+        .collection<Asset>('assets')
+        .find(assetQuery, {
+          projection: { _id: 0, id: 1, asset_tag: 1, name: 1, category: 1, brand: 1, model: 1 },
+        })
+        .toArray(),
+      this.db
+        .collection<StoredUser>('users')
+        .find({}, { projection: { _id: 0, id: 1, name: 1 } })
+        .toArray(),
     ]);
-    const scopedLogs = logs.filter((m) => matchesScope(m, scope));
-    return enrichMaintenance(scopedLogs, assets, users);
+    return enrichMaintenance(logs, assets, users);
   }
 
   async listMaintenanceByAsset(assetId: string): Promise<MaintenanceLog[]> {
-    const all = await this.listMaintenanceLogs();
-    return all.filter((m) => m.asset_id === assetId);
+    const rows = await this.db
+      .collection<MaintenanceLog>('maintenance_logs')
+      .find({ asset_id: assetId }, { projection: { _id: 0 } })
+      .sort({ service_date: -1, created_at: -1 })
+      .toArray();
+    return this.enrichMaintenanceRows(rows);
   }
 
   async getMaintenanceById(id: string): Promise<MaintenanceLog | null> {
-    const all = await this.listMaintenanceLogs();
-    return all.find((m) => m.id === id) ?? null;
+    const row = await this.db
+      .collection<MaintenanceLog>('maintenance_logs')
+      .findOne({ id }, { projection: { _id: 0 } });
+    if (!row) return null;
+    const enriched = await this.enrichMaintenanceRows([row]);
+    return enriched[0] ?? null;
   }
 
   async createMaintenanceLog(
@@ -1004,9 +1189,17 @@ class MongoItamsDatabase implements ItamsDatabase {
     userId: string,
     scope?: TenantScopeFilter
   ): Promise<SystemNotification[]> {
+    const assetQuery = buildMongoScopeQuery(scope);
+    const logQuery = buildMongoScopeQuery(scope);
     const [assets, logs, acks] = await Promise.all([
-      this.listAssets(scope),
-      this.listMaintenanceLogs(scope),
+      this.db
+        .collection<Asset>('assets')
+        .find(assetQuery, { projection: { _id: 0 } })
+        .toArray(),
+      this.db
+        .collection<MaintenanceLog>('maintenance_logs')
+        .find(logQuery, { projection: { _id: 0 } })
+        .toArray(),
       this.db
         .collection<NotificationAck>('notification_acks')
         .find({ user_id: userId }, { projection: { _id: 0 } })
@@ -1017,37 +1210,71 @@ class MongoItamsDatabase implements ItamsDatabase {
 
   async acknowledgeNotifications(userId: string, alertKeys: string[]): Promise<void> {
     const now = new Date().toISOString();
-    for (const alert_key of alertKeys) {
-      await this.db.collection('notification_acks').updateOne(
-        { alert_key, user_id: userId },
-        {
-          $setOnInsert: {
-            id: `ack-${crypto.randomUUID().slice(0, 8)}`,
-            alert_key,
-            user_id: userId,
+    if (alertKeys.length === 0) return;
+    await this.db.collection('notification_acks').bulkWrite(
+      alertKeys.map((alert_key) => ({
+        updateOne: {
+          filter: { alert_key, user_id: userId },
+          update: {
+            $setOnInsert: {
+              id: `ack-${crypto.randomUUID().slice(0, 8)}`,
+              alert_key,
+              user_id: userId,
+            },
+            $set: { acknowledged_at: now },
           },
-          $set: { acknowledged_at: now },
+          upsert: true,
         },
-        { upsert: true }
-      );
-    }
+      }))
+    );
   }
 
   async getDashboardSummary(
     userId: string,
     scope?: TenantScopeFilter
   ): Promise<DashboardSummary> {
-    const [assets, employees, assignments, logs, notifications] = await Promise.all([
-      this.listAssets(scope),
-      this.listEmployees(scope),
-      this.listAssignments(scope),
-      this.listMaintenanceLogs(scope),
-      this.listNotifications(userId, scope),
-    ]);
-    return buildDashboardSummary(assets, employees, assignments, logs, notifications);
+    const scopedQuery = buildMongoScopeQuery(scope);
+    const [rawAssets, rawEmployees, rawAssignments, rawLogs, users, acks] =
+      await Promise.all([
+        this.db
+          .collection<Asset>('assets')
+          .find(scopedQuery, { projection: { _id: 0 } })
+          .sort({ created_at: -1 })
+          .toArray(),
+        this.db
+          .collection<Employee>('employees')
+          .find(scopedQuery, { projection: { _id: 0 } })
+          .sort({ full_name: 1 })
+          .toArray(),
+        this.db
+          .collection<AssetAssignment>('assignments')
+          .find(scopedQuery, { projection: { _id: 0 } })
+          .sort({ created_at: -1 })
+          .toArray(),
+        this.db
+          .collection<MaintenanceLog>('maintenance_logs')
+          .find(scopedQuery, { projection: { _id: 0 } })
+          .sort({ service_date: -1, created_at: -1 })
+          .toArray(),
+        this.db
+          .collection<StoredUser>('users')
+          .find({}, { projection: { _id: 0, id: 1, name: 1 } })
+          .toArray(),
+        this.db
+          .collection<NotificationAck>('notification_acks')
+          .find({ user_id: userId }, { projection: { _id: 0 } })
+          .toArray(),
+      ]);
+
+    const assets = enrichAssets(rawAssets, rawEmployees);
+    const assignments = enrichAssignments(rawAssignments, rawAssets, rawEmployees, users);
+    const logs = enrichMaintenance(rawLogs, rawAssets, users);
+    const notifications = computeNotifications(assets, logs, acks);
+    return buildDashboardSummary(assets, rawEmployees, assignments, logs, notifications);
   }
 
   async resetToCleanState(): Promise<void> {
+    this.userCache.clear();
     await Promise.all([
       this.db.collection('notification_acks').deleteMany({}),
       this.db.collection('maintenance_logs').deleteMany({}),
@@ -1577,6 +1804,25 @@ class SqliteItamsDatabase implements ItamsDatabase {
     return Number(res.changes) > 0;
   }
 
+  async countAssets(scope?: TenantScopeFilter): Promise<number> {
+    if (!scope) {
+      const row = this.db.prepare('SELECT COUNT(*) AS cnt FROM assets').get() as { cnt: number };
+      return row.cnt;
+    }
+    if (scope.orgIds) {
+      if (scope.orgIds.length === 0) return 0;
+      const placeholders = scope.orgIds.map(() => '?').join(', ');
+      const row = this.db
+        .prepare(`SELECT COUNT(*) AS cnt FROM assets WHERE tenant_id = ? AND org_id IN (${placeholders})`)
+        .get(scope.tenantId, ...scope.orgIds) as { cnt: number };
+      return row.cnt;
+    }
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS cnt FROM assets WHERE tenant_id = ?')
+      .get(scope.tenantId) as { cnt: number };
+    return row.cnt;
+  }
+
   async listAssets(scope?: TenantScopeFilter): Promise<Asset[]> {
     const assets = (
       this.db
@@ -1594,10 +1840,13 @@ class SqliteItamsDatabase implements ItamsDatabase {
       .prepare('SELECT * FROM assets WHERE id = ?')
       .get(id) as unknown as Asset | undefined;
     if (!asset) return null;
-    const employees = this.db
-      .prepare('SELECT * FROM employees')
-      .all() as unknown as Employee[];
-    return enrichAssets([asset], employees)[0] ?? null;
+    if (!asset.assigned_employee_id) {
+      return enrichAssets([asset], [])[0] ?? null;
+    }
+    const emp = this.db
+      .prepare('SELECT * FROM employees WHERE id = ?')
+      .get(asset.assigned_employee_id) as unknown as Employee | undefined;
+    return enrichAssets([asset], emp ? [emp] : [])[0] ?? null;
   }
 
   async createAsset(asset: Asset): Promise<Asset> {
@@ -1687,18 +1936,40 @@ class SqliteItamsDatabase implements ItamsDatabase {
   }
 
   async listAssignmentsByAsset(assetId: string): Promise<AssetAssignment[]> {
-    const all = await this.listAssignments();
-    return all.filter((a) => a.asset_id === assetId);
+    const assignments = this.db
+      .prepare('SELECT * FROM assignments WHERE asset_id = ? ORDER BY created_at DESC')
+      .all(assetId) as unknown as AssetAssignment[];
+    if (assignments.length === 0) return [];
+    const assets = this.db.prepare('SELECT * FROM assets WHERE id = ?').all(assetId) as unknown as Asset[];
+    const employees = this.db.prepare('SELECT * FROM employees').all() as unknown as Employee[];
+    const users = this.getAllStoredUsers();
+    return enrichAssignments(assignments, assets, employees, users);
   }
 
   async listAssignmentsByEmployee(employeeId: string): Promise<AssetAssignment[]> {
-    const all = await this.listAssignments();
-    return all.filter((a) => a.employee_id === employeeId);
+    const assignments = this.db
+      .prepare('SELECT * FROM assignments WHERE employee_id = ? ORDER BY created_at DESC')
+      .all(employeeId) as unknown as AssetAssignment[];
+    if (assignments.length === 0) return [];
+    const assets = this.db.prepare('SELECT * FROM assets').all() as unknown as Asset[];
+    const employees = this.db
+      .prepare('SELECT * FROM employees WHERE id = ?')
+      .all(employeeId) as unknown as Employee[];
+    const users = this.getAllStoredUsers();
+    return enrichAssignments(assignments, assets, employees, users);
   }
 
   async getAssignmentById(id: string): Promise<AssetAssignment | null> {
-    const all = await this.listAssignments();
-    return all.find((a) => a.id === id) ?? null;
+    const asg = this.db
+      .prepare('SELECT * FROM assignments WHERE id = ?')
+      .get(id) as unknown as AssetAssignment | undefined;
+    if (!asg) return null;
+    const assets = this.db.prepare('SELECT * FROM assets WHERE id = ?').all(asg.asset_id) as unknown as Asset[];
+    const employees = this.db
+      .prepare('SELECT * FROM employees WHERE id = ?')
+      .all(asg.employee_id) as unknown as Employee[];
+    const users = this.getAllStoredUsers();
+    return enrichAssignments([asg], assets, employees, users)[0] ?? null;
   }
 
   async assignAsset(params: {
@@ -1859,13 +2130,23 @@ class SqliteItamsDatabase implements ItamsDatabase {
   }
 
   async listMaintenanceByAsset(assetId: string): Promise<MaintenanceLog[]> {
-    const all = await this.listMaintenanceLogs();
-    return all.filter((m) => m.asset_id === assetId);
+    const logs = this.db
+      .prepare('SELECT * FROM maintenance_logs WHERE asset_id = ? ORDER BY service_date DESC, created_at DESC')
+      .all(assetId) as unknown as MaintenanceLog[];
+    if (logs.length === 0) return [];
+    const assets = this.db.prepare('SELECT * FROM assets WHERE id = ?').all(assetId) as unknown as Asset[];
+    const users = this.getAllStoredUsers();
+    return enrichMaintenance(logs, assets, users);
   }
 
   async getMaintenanceById(id: string): Promise<MaintenanceLog | null> {
-    const all = await this.listMaintenanceLogs();
-    return all.find((m) => m.id === id) ?? null;
+    const log = this.db
+      .prepare('SELECT * FROM maintenance_logs WHERE id = ?')
+      .get(id) as unknown as MaintenanceLog | undefined;
+    if (!log) return null;
+    const assets = this.db.prepare('SELECT * FROM assets WHERE id = ?').all(log.asset_id) as unknown as Asset[];
+    const users = this.getAllStoredUsers();
+    return enrichMaintenance([log], assets, users)[0] ?? null;
   }
 
   async createMaintenanceLog(
@@ -1987,14 +2268,30 @@ class SqliteItamsDatabase implements ItamsDatabase {
     userId: string,
     scope?: TenantScopeFilter
   ): Promise<DashboardSummary> {
-    const [assets, employees, assignments, logs, notifications] = await Promise.all([
-      this.listAssets(scope),
-      this.listEmployees(scope),
-      this.listAssignments(scope),
-      this.listMaintenanceLogs(scope),
-      this.listNotifications(userId, scope),
-    ]);
-    return buildDashboardSummary(assets, employees, assignments, logs, notifications);
+    const rawAssets = (
+      this.db.prepare('SELECT * FROM assets ORDER BY created_at DESC').all() as unknown as Asset[]
+    ).filter((a) => matchesScope(a, scope));
+    const rawEmployees = (
+      this.db.prepare('SELECT * FROM employees ORDER BY full_name ASC').all() as unknown as Employee[]
+    ).filter((e) => matchesScope(e, scope));
+    const rawAssignments = (
+      this.db.prepare('SELECT * FROM assignments ORDER BY created_at DESC').all() as unknown as AssetAssignment[]
+    ).filter((a) => matchesScope(a, scope));
+    const rawLogs = (
+      this.db
+        .prepare('SELECT * FROM maintenance_logs ORDER BY service_date DESC, created_at DESC')
+        .all() as unknown as MaintenanceLog[]
+    ).filter((m) => matchesScope(m, scope));
+    const users = this.getAllStoredUsers();
+    const acks = this.db
+      .prepare('SELECT * FROM notification_acks WHERE user_id = ?')
+      .all(userId) as unknown as NotificationAck[];
+
+    const assets = enrichAssets(rawAssets, rawEmployees);
+    const assignments = enrichAssignments(rawAssignments, rawAssets, rawEmployees, users);
+    const logs = enrichMaintenance(rawLogs, rawAssets, users);
+    const notifications = computeNotifications(assets, logs, acks);
+    return buildDashboardSummary(assets, rawEmployees, assignments, logs, notifications);
   }
 
   async resetToCleanState(): Promise<void> {

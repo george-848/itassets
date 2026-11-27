@@ -18,7 +18,6 @@ import {
   X,
 } from 'lucide-react';
 import { api, ApiError } from '../lib/api.ts';
-import { googleSignIn } from '../lib/googleAuth.ts';
 import type { User } from '../types/itams.ts';
 import type { PlanCode, SubscriptionPlan, TenantType } from '../types/saas.ts';
 import { ThemeSwitcher } from './ThemeSwitcher.tsx';
@@ -184,6 +183,7 @@ export function LoginView({ onSuccess }: LoginViewProps) {
     setError(null);
     setGoogleLoading(true);
     try {
+      const { googleSignIn } = await import('../lib/googleAuth.ts');
       const { accessToken } = await googleSignIn();
       const res = await api.loginWithGoogle(accessToken);
       onSuccess(res.token, res.user);
