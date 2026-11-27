@@ -1,7 +1,7 @@
 # Security Specification & Payload-First TDD (`security_spec.md`)
 
 ## 1. Core Data Invariants
-1. **Tenant Isolation**: Every business record (`assets`, `tickets`, `incidents`, `problems`, `changes`, `serviceRequests`, `softwareLicences`, `vendors`, `purchaseRequests`, `slaPolicies`, `contracts`, `auditLogs`, etc.) requires a valid `tenantId` and `orgId` matching `^[a-zA-Z0-9_-]+$` (`<= 128` chars), and reads/writes are denied unless the authenticated user holds an active membership in `userMemberships/{uid}_{tenantId}` with org access (`orgAccessMode == 'all'` or `orgId` authorized) and `email_verified == true`, or is the verified Platform Super Admin (`georgearthur848@gmail.com` with `email_verified == true`).
+1. **Tenant Isolation**: Every business record (`assets`, `tickets`, `incidents`, `problems`, `changes`, `serviceRequests`, `softwareLicences`, `vendors`, `purchaseRequests`, `slaPolicies`, `contracts`, `auditLogs`, etc.) requires a valid `tenantId` and `orgId` matching `^[a-zA-Z0-9_-]+$` (`<= 128` chars), and reads/writes are denied unless the authenticated user holds an active membership in `userMemberships/{uid}_{tenantId}` with org access (`orgAccessMode == 'all'` or `orgId` authorized) and `email_verified == true`, or is the verified Platform Super Admin (`tonadoappiah50@gmail.com` with `email_verified == true`).
 2. **PII Isolation**: User PII (`email`, `phone`, `mfaEnabled`) lives under `/users/{uid}/private/{docId}` and is readable/writable ONLY by the owning `uid` or verified Platform Super Admin—never via blanket `isSignedIn()` reads.
 3. **Immutable Ownership & Timestamps**: `createdBy`, `tenantId`, and `createdAt` (`== request.time` on create) cannot be reassigned during updates.
 4. **Role & Subscription Integrity**: Client writes cannot escalate `role` on `userMemberships`, mutate `platformAuditLogs`, forge `payments` / `invoices`, or bypass subscription status/limits.
@@ -14,7 +14,7 @@
 4. **Cross-Org MSP Leakage**: MSP Technician assigned only to `org-client-1` attempts write/read on `org-client-2` asset.
 5. **Self-Role Escalation**: Normal tenant member creates/updates `/userMemberships/{uid}_{tenantId}` setting `role: 'tenant_owner'` or `status: 'active'`.
 6. **Shadow / Ghost Field Injection**: Member creates an asset injecting `{ ..., isVerified: true, adminOverride: true }`.
-7. **Email Spoof Without Verification**: User token with `email: 'georgearthur848@gmail.com'` and `email_verified: false` attempts Super Admin read/write on `/plans/starter`.
+7. **Email Spoof Without Verification**: User token with `email: 'tonadoappiah50@gmail.com'` and `email_verified: false` attempts Super Admin read/write on `/plans/starter`.
 8. **ID Poisoning / DoW**: Attacker writes `/assets/${'A'.repeat(500)}` or injects 100KB string into `title`.
 9. **PII Cross-User Read**: Authenticated User A attempts `get(/users/userB/private/info)`.
 10. **Immutable Field Hijack**: Member updates `/assets/ast-1` attempting to change `tenantId` or `createdBy` or `createdAt`.

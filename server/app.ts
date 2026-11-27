@@ -27,6 +27,7 @@ import { buildDashboardSummary, createDatabase, type ItamsDatabase } from './db.
 import { checkQuotaExceeded } from './entitlements.ts';
 import { sendTransactionalEmail } from './mailer.ts';
 import { registerSaasRoutes } from './routesSaas.ts';
+import { BOOTSTRAP_SUPER_ADMIN_EMAIL } from './rbac.ts';
 import { DEFAULT_ORG_ID, DEFAULT_TENANT_ID, SaasStore } from './saasStore.ts';
 import { evaluateTicketBreach } from './sla.ts';
 import {
@@ -302,43 +303,77 @@ export function createApiApp(
     | { ok: false; status: number; error: string }
   > {
     const now = new Date().toISOString();
-    const existingUser = await db.findUserByEmail(params.email);
+    const normalizedEmail = params.email.trim().toLowerCase();
+    const isBootstrapSuper = normalizedEmail === BOOTSTRAP_SUPER_ADMIN_EMAIL;
+    let existingUser = await db.findUserByEmail(normalizedEmail);
 
     if (!existingUser) {
       const randomSecret = await hashPasswordAsync(crypto.randomBytes(24).toString('hex'));
       const createdUser = await db.createUser({
         id: `usr-${crypto.randomUUID().slice(0, 8)}`,
         name: params.displayName,
-        email: params.email,
+        email: normalizedEmail,
         password_hash: randomSecret,
-        role: 'staff',
-        department: 'IT Infrastructure',
-        status: 'pending',
+        role: isBootstrapSuper ? 'admin' : 'staff',
+        department: isBootstrapSuper ? 'Platform Governance' : 'IT Infrastructure',
+        status: isBootstrapSuper ? 'active' : 'pending',
         created_at: now,
-        last_login: null,
+        last_login: isBootstrapSuper ? now : null,
         email_verified: true,
         mfa_enabled: false,
-        is_super_admin: false,
+        is_super_admin: isBootstrapSuper,
       });
       await store.mutate(() => {
         store.ensureUserMembership({
           userId: createdUser.id,
           email: createdUser.email,
-          defaultRole: 'it_technician',
+          defaultRole: isBootstrapSuper ? 'tenant_owner' : 'it_technician',
         });
       });
-      return {
-        ok: false,
-        status: 403,
-        error: `Verification required: your ${params.provider} account (${params.email}) has been submitted for administrator approval. Ask an admin to verify your access in User Management, then sign in again.`,
-      };
+      if (!isBootstrapSuper) {
+        return {
+          ok: false,
+          status: 403,
+          error: `Verification required: your ${params.provider} account (${normalizedEmail}) has been submitted for administrator approval. Ask an admin to verify your access in User Management, then sign in again.`,
+        };
+      }
+      const token = signSessionToken({
+        id: createdUser.id,
+        email: createdUser.email,
+        role: createdUser.role,
+      });
+      return { ok: true, token, user: { ...createdUser, last_login: now } };
+    }
+
+    if (isBootstrapSuper) {
+      if (
+        existingUser.status !== 'active' ||
+        existingUser.role !== 'admin' ||
+        !existingUser.is_super_admin ||
+        !existingUser.email_verified
+      ) {
+        await db.updateUser(existingUser.id, {
+          status: 'active',
+          role: 'admin',
+          is_super_admin: true,
+          email_verified: true,
+        });
+        existingUser = (await db.findUserByEmail(normalizedEmail)) || existingUser;
+      }
+      await store.mutate(() => {
+        store.ensureUserMembership({
+          userId: existingUser!.id,
+          email: existingUser!.email,
+          defaultRole: 'tenant_owner',
+        });
+      });
     }
 
     if (existingUser.status === 'pending') {
       return {
         ok: false,
         status: 403,
-        error: `Verification required: your account (${params.email}) is still awaiting administrator approval in User Management.`,
+        error: `Verification required: your account (${normalizedEmail}) is still awaiting administrator approval in User Management.`,
       };
     }
 

@@ -1,12 +1,12 @@
 {
-  "projectId": "carbon-minutia-470404-m5",
-  "appId": "1:996849213164:web:cc55cafdadb5417d23cfc9",
-  "apiKey": "AIzaSyBZ4Saz6A-haIZsyCJ8v7UTMLU5aU_afy8",
-  "authDomain": "carbon-minutia-470404-m5.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-assetvaultit-cf274ac0-bca0-4c24-86d5-b1fcba1aa648",
-  "storageBucket": "carbon-minutia-470404-m5.firebasestorage.app",
-  "messagingSenderId": "996849213164",
+  "projectId": "it-asset-and-helpdesk-id",
+  "appId": "1:735775811768:web:255995520b960419c8ec4d",
+  "apiKey": "AIzaSyCeQpI7zSf645Rva5uUUWFVYG0pWw2RCP8",
+  "authDomain": "it-asset-and-helpdesk-id.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "it-asset-and-helpdesk-id.firebasestorage.app",
+  "messagingSenderId": "735775811768",
   "measurementId": "",
-  "oAuthClientId": "996849213164-90u867ajttkv4k1voh2is59khdojpdsi.apps.googleusercontent.com",
+  "oAuthClientId": "735775811768-2nte9ca6upt2uc9vjlv0ur8j57e48mib.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

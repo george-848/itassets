@@ -20,10 +20,10 @@ describe('Firestore Security Rules Policy Assertions', () => {
     assert.match(rulesText, /match \/\{document=\*\*\}[\s\S]*allow read, write: if false;/);
   });
 
-  it('requires verified email and binds super admin bootstrap to georgearthur848@gmail.com', () => {
+  it('requires verified email and binds super admin bootstrap to tonadoappiah50@gmail.com', () => {
     assert.match(
       rulesText,
-      /function isBootstrappedSuperAdmin\(\)\s*\{[\s\S]*request\.auth\.token\.email == 'georgearthur848@gmail\.com'/
+      /function isBootstrappedSuperAdmin\(\)\s*\{[\s\S]*request\.auth\.token\.email == 'tonadoappiah50@gmail\.com'/
     );
     assert.match(rulesText, /request\.auth\.token\.email_verified == true/);
   });

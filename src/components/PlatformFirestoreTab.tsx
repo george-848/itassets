@@ -470,7 +470,9 @@ export function PlatformFirestoreTab({
   }, [tenants, purgeTenantId]);
 
   const isSuperAdminReady = Boolean(
-    fbUser && fbUser.emailVerified && fbUser.email === BOOTSTRAP_SUPER_ADMIN_EMAIL
+    fbUser &&
+      fbUser.emailVerified &&
+      fbUser.email?.trim().toLowerCase() === BOOTSTRAP_SUPER_ADMIN_EMAIL
   );
 
   const selectedMeta = useMemo(
@@ -702,7 +704,7 @@ export function PlatformFirestoreTab({
     setConnectingAuth(true);
     try {
       const user = await connectFirebaseGoogleAccount();
-      if (user.email !== BOOTSTRAP_SUPER_ADMIN_EMAIL) {
+      if (user.email?.trim().toLowerCase() !== BOOTSTRAP_SUPER_ADMIN_EMAIL) {
         onToast(
           'error',
           `Signed in as ${user.email}, but Cloud Firestore Super Admin rules require ${BOOTSTRAP_SUPER_ADMIN_EMAIL}.`

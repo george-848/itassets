@@ -5,7 +5,7 @@ import type {
   UserMembership,
 } from '../src/types/saas.ts';
 
-export const BOOTSTRAP_SUPER_ADMIN_EMAIL = 'georgearthur848@gmail.com';
+export const BOOTSTRAP_SUPER_ADMIN_EMAIL = 'tonadoappiah50@gmail.com';
 
 const ALL_TENANT_PERMISSIONS: PermissionCode[] = [
   'dashboard.read',

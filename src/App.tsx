@@ -27,8 +27,23 @@ import type {
 } from './types/itams.ts';
 import type { PurchaseOrder, SoftwareLicence, Ticket } from './types/saas.ts';
 
+async function loadWorkspaceShell() {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await import('./components/WorkspaceShell.tsx');
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 2) {
+        await new Promise((r) => window.setTimeout(r, 250 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 const WorkspaceShell = lazy(() =>
-  import('./components/WorkspaceShell.tsx').then((m) => ({
+  loadWorkspaceShell().then((m) => ({
     default: m.WorkspaceShell,
   }))
 );
@@ -128,7 +143,7 @@ export default function App() {
   useEffect(() => {
     if (!authChecked || currentUser) return;
     const timer = window.setTimeout(() => {
-      void import('./components/WorkspaceShell.tsx');
+      void loadWorkspaceShell().catch(() => {});
     }, 120);
     return () => window.clearTimeout(timer);
   }, [authChecked, currentUser]);
@@ -184,7 +199,7 @@ export default function App() {
 
         const [boot] = await Promise.all([
           api.bootstrap(),
-          import('./components/WorkspaceShell.tsx'),
+          loadWorkspaceShell().catch(() => undefined),
         ]);
         if (!active) return;
         applyBootstrapPayload(boot);
@@ -210,7 +225,7 @@ export default function App() {
     setActiveSection('dashboard');
     await Promise.all([
       loadWorkspaceData(user),
-      import('./components/WorkspaceShell.tsx'),
+      loadWorkspaceShell(),
     ]);
     pushToast('success', `Signed in as ${user.name}.`);
   };

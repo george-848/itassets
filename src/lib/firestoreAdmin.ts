@@ -100,7 +100,7 @@ const CATALOG_MAP = new Map<string, FirestoreCollectionMeta>(
   FIRESTORE_COLLECTION_CATALOG.map((c) => [c.name, c])
 );
 
-export const BOOTSTRAP_SUPER_ADMIN_EMAIL = 'georgearthur848@gmail.com';
+export const BOOTSTRAP_SUPER_ADMIN_EMAIL = 'tonadoappiah50@gmail.com';
 
 export function getFirestoreCollectionMeta(
   name: string

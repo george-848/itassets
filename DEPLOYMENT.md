@@ -2,10 +2,10 @@
 
 ## 1. Architecture & Firebase Starter Tier Notes
 
-- **Firebase Project**: `carbon-minutia-470404-m5` (Google-hosted **Starter Tier**)
-- **Firestore Database**: `ai-studio-assetvaultit-cf274ac0-bca0-4c24-86d5-b1fcba1aa648` (`firebase-applet-config.json`)
+- **Firebase Project**: `it-asset-and-helpdesk-id`
+- **Firestore Database**: `(default)` (`firebase-applet-config.json`)
 - **Firestore Security Rules**: Enforced via `/firestore.rules` with tenant/org isolation, `isSuperAdmin()` override, and owner/membership checks.
-- **Starter Tier Constraint**: Do **not** configure `firebase-admin` Firestore or Firebase Auth IAM Admin calls against `carbon-minutia-470404-m5` (Starter Tier denies IAM/admin SDK calls with `7 PERMISSION_DENIED`). Client-side Firebase SDK initialization is handled in `src/lib/firebase.ts`, while the Express backend (`server/*`) handles multi-tenant APIs, RBAC, Paystack billing, and SQLite/MongoDB Atlas persistence.
+- **Starter Tier Constraint**: Do **not** configure `firebase-admin` Firestore or Firebase Auth IAM Admin calls against Google-hosted Starter Tier projects (Starter Tier denies IAM/admin SDK calls with `7 PERMISSION_DENIED`). Client-side Firebase SDK initialization is handled in `src/lib/firebase.ts`, while the Express backend (`server/*`) handles multi-tenant APIs, RBAC, Paystack billing, and SQLite/MongoDB Atlas persistence.
 
 ## 2. Environment Variables & Secret Manager
 
@@ -20,19 +20,19 @@ Configure all production secrets via Cloud Run Secret Manager or your deployment
 | `CRON_SECRET` | Shared secret verified on `X-Cron-Secret` header for `POST /api/jobs/run` |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Outbound transactional SMTP for workspace invites and password resets |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | Optional GitHub OAuth credentials |
-| `SUPER_ADMIN_INITIAL_PASSWORD` | Override initial seed password for `georgearthur848@gmail.com` |
+| `SUPER_ADMIN_INITIAL_PASSWORD` | Override initial seed password for `tonadoappiah50@gmail.com` |
 
 ## 3. Cloud Run Container Deployment
 
 ```bash
 # Build and push container image
-gcloud builds submit --tag gcr.io/carbon-minutia-470404-m5/assetvault-it
+gcloud builds submit --tag gcr.io/it-asset-and-helpdesk-id/assetvault-it
 
-# Deploy to Cloud Run on port 3000
+# Deploy to Cloud Run on port 3000 in africa-south1
 gcloud run deploy assetvault-it \
-  --image gcr.io/carbon-minutia-470404-m5/assetvault-it \
+  --image gcr.io/it-asset-and-helpdesk-id/assetvault-it \
   --platform managed \
-  --region europe-west1 \
+  --region africa-south1 \
   --port 3000 \
   --allow-unauthenticated \
   --set-env-vars APP_URL=https://your-service-url.run.app,MONGODB_DB_NAME=assetvault_it \

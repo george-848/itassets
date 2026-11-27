@@ -17,22 +17,23 @@ export const app: FirebaseApp =
   getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 function createFirestoreClient(): Firestore {
+  const configuredDbId = firebaseConfig.firestoreDatabaseId?.trim();
+  const useNamedDb = Boolean(configuredDbId && configuredDbId !== '(default)');
   try {
-    return initializeFirestore(
-      app,
-      {
-        localCache: persistentLocalCache({
-          tabManager: persistentMultipleTabManager(),
-        }),
-      },
-      firebaseConfig.firestoreDatabaseId
-    );
+    const settings = {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
+    };
+    return useNamedDb
+      ? initializeFirestore(app, settings, configuredDbId)
+      : initializeFirestore(app, settings);
   } catch {
-    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    return useNamedDb ? getFirestore(app, configuredDbId) : getFirestore(app);
   }
 }
 
-// CRITICAL: Pass firestoreDatabaseId explicitly so the provisioned Enterprise database is targeted.
+// CRITICAL: Pass firestoreDatabaseId explicitly when targeting a non-default provisioned database.
 export const db: Firestore = createFirestoreClient();
 export const auth: Auth = getAuth(app);
 

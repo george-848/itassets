@@ -508,7 +508,7 @@ describe('Multi-tenant isolation, MSP scoping, RBAC, Plan Quotas, & Paystack Web
 
     const superLogin = await jsonReq('POST', '/api/auth/login', {
       body: {
-        email: 'georgearthur848@gmail.com',
+        email: 'tonadoappiah50@gmail.com',
         password: process.env.SUPER_ADMIN_INITIAL_PASSWORD || 'SuperAdmin@2026!',
       },
     });

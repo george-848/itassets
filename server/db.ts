@@ -624,15 +624,60 @@ class MongoItamsDatabase implements ItamsDatabase {
           .insertMany(seed.maintenanceLogs);
       }
     } else {
+      const previousBootstrapEmails = [
+        'georgearthur848@gmail.com',
+        'nanaappiahkubi848@gmail.com',
+      ];
+      await this.db
+        .collection('users')
+        .updateMany(
+          { email: { $in: previousBootstrapEmails }, is_super_admin: true },
+          { $set: { is_super_admin: false } }
+        );
+
       const superSeed = seed.users.find((u) => u.is_super_admin);
       if (superSeed) {
         const existingSuper = await this.findUserByEmail(superSeed.email);
-        if (!existingSuper) {
-          await this.db.collection('users').insertOne({ ...superSeed });
-        } else if (!existingSuper.is_super_admin) {
-          await this.db
-            .collection('users')
-            .updateOne({ id: existingSuper.id }, { $set: { is_super_admin: true, email_verified: true } });
+        if (existingSuper) {
+          if (
+            !existingSuper.is_super_admin ||
+            !existingSuper.email_verified ||
+            existingSuper.status !== 'active' ||
+            existingSuper.role !== 'admin'
+          ) {
+            await this.db.collection('users').updateOne(
+              { id: existingSuper.id },
+              {
+                $set: {
+                  status: 'active',
+                  role: 'admin',
+                  is_super_admin: true,
+                  email_verified: true,
+                },
+              }
+            );
+            this.userCache.delete(existingSuper.id);
+          }
+        } else {
+          const existingById = await this.findUserById(superSeed.id);
+          if (existingById) {
+            await this.db.collection('users').updateOne(
+              { id: superSeed.id },
+              {
+                $set: {
+                  email: superSeed.email,
+                  password_hash: superSeed.password_hash,
+                  status: 'active',
+                  role: 'admin',
+                  is_super_admin: true,
+                  email_verified: true,
+                },
+              }
+            );
+            this.userCache.delete(superSeed.id);
+          } else {
+            await this.db.collection('users').insertOne({ ...superSeed });
+          }
         }
       }
     }
@@ -1592,35 +1637,65 @@ class SqliteItamsDatabase implements ItamsDatabase {
         );
       }
     } else {
+      const previousBootstrapEmails = [
+        'georgearthur848@gmail.com',
+        'nanaappiahkubi848@gmail.com',
+      ];
+      this.db
+        .prepare(
+          'UPDATE users SET is_super_admin = 0 WHERE LOWER(email) IN (?, ?) AND is_super_admin = 1'
+        )
+        .run(...previousBootstrapEmails);
+
       const superSeed = seed.users.find((u) => u.is_super_admin);
       if (superSeed) {
         const existingSuper = await this.findUserByEmail(superSeed.email);
-        if (!existingSuper) {
-          this.db
-            .prepare(
-              `INSERT INTO users (id, name, email, password_hash, role, department, status, created_at, last_login, email_verified, mfa_enabled, is_super_admin)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .run(
-              superSeed.id,
-              superSeed.name,
-              superSeed.email,
-              superSeed.password_hash,
-              superSeed.role,
-              superSeed.department,
-              superSeed.status,
-              superSeed.created_at,
-              superSeed.last_login,
-              1,
-              0,
-              1
-            );
-        } else if (!existingSuper.is_super_admin) {
-          this.db
-            .prepare(
-              'UPDATE users SET is_super_admin = 1, email_verified = 1 WHERE id = ?'
-            )
-            .run(existingSuper.id);
+        if (existingSuper) {
+          if (
+            !existingSuper.is_super_admin ||
+            !existingSuper.email_verified ||
+            existingSuper.status !== 'active' ||
+            existingSuper.role !== 'admin'
+          ) {
+            this.db
+              .prepare(
+                `UPDATE users
+                 SET status = 'active', role = 'admin', is_super_admin = 1, email_verified = 1
+                 WHERE id = ?`
+              )
+              .run(existingSuper.id);
+          }
+        } else {
+          const existingById = await this.findUserById(superSeed.id);
+          if (existingById) {
+            this.db
+              .prepare(
+                `UPDATE users
+                 SET email = ?, password_hash = ?, status = 'active', role = 'admin', is_super_admin = 1, email_verified = 1
+                 WHERE id = ?`
+              )
+              .run(superSeed.email, superSeed.password_hash, superSeed.id);
+          } else {
+            this.db
+              .prepare(
+                `INSERT INTO users (id, name, email, password_hash, role, department, status, created_at, last_login, email_verified, mfa_enabled, is_super_admin)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              )
+              .run(
+                superSeed.id,
+                superSeed.name,
+                superSeed.email,
+                superSeed.password_hash,
+                superSeed.role,
+                superSeed.department,
+                superSeed.status,
+                superSeed.created_at,
+                superSeed.last_login,
+                1,
+                0,
+                1
+              );
+          }
         }
       }
     }
